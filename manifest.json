@@ -1,0 +1,17 @@
+{
+  "name": "إدارة المخازن — مصنع القطامي",
+  "short_name": "إدارة المخازن",
+  "description": "برنامج إدارة المخازن لمصنع القطامي",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F3EFE7",
+  "theme_color": "#C6613F",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
