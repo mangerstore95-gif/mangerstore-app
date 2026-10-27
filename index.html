@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; img-src 'self' data: blob:; manifest-src 'self'; worker-src 'self'; connect-src https://*.supabase.co wss://*.supabase.co http://127.0.0.1:* http://localhost:*; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; img-src 'self' data: blob:; manifest-src 'self'; worker-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co http://127.0.0.1:* http://localhost:*; base-uri 'none'; form-action 'none'">
 <meta name="theme-color" content="#F3EFE7">
 <title>إدارة المخازن</title>
 <link rel="manifest" href="manifest.json">
@@ -213,7 +213,7 @@ const DEFAULT_URL = 'https://masodssfbppadcfqkfcp.supabase.co';
 const DEFAULT_KEY = 'sb_publishable_nAjjVRgAlfwzg3MYDn7OGQ_RH5efYKP';   // المفتاح العام (publishable) — آمن للنشر
 const DOMAIN = 'qattami.app';                 // اسم الدخول amir ⇐ amir@qattami.app (أو إيميل حقيقي مربوط بالمستخدم)
 const OLD_APP = 'https://mangerstore-system.streamlit.app';
-const VERSION = 'web-2.9';
+const VERSION = 'web-3.0';
 const PAGE = 1000;                            // أقصى عدد صفوف يرجعه Supabase في الطلب الواحد
 const LS = {
   get(k, d = null) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
