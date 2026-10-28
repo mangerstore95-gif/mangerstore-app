@@ -213,7 +213,7 @@ const DEFAULT_URL = 'https://masodssfbppadcfqkfcp.supabase.co';
 const DEFAULT_KEY = 'sb_publishable_nAjjVRgAlfwzg3MYDn7OGQ_RH5efYKP';   // المفتاح العام (publishable) — آمن للنشر
 const DOMAIN = 'qattami.app';                 // اسم الدخول amir ⇐ amir@qattami.app (أو إيميل حقيقي مربوط بالمستخدم)
 const OLD_APP = 'https://mangerstore-system.streamlit.app';
-const VERSION = 'web-3.2';
+const VERSION = 'web-3.3';
 const PAGE = 1000;                            // أقصى عدد صفوف يرجعه Supabase في الطلب الواحد
 const LS = {
   get(k, d = null) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
@@ -431,6 +431,8 @@ class Table {
     for (const x of [...fresh, ...changed]) byId.set(x.id, x);
     let rows = [...byId.values()];
     if (rows.length !== n) rows = await API.selectAll(this.name, this.cols);
+    // السجلات المحفوظة على الجهاز ولم تُرسل بعد (رقم مؤقت سالب) تبقى ظاهرة
+    for (const x of this.rows) if (x.id < 0 && !rows.some(y => y.id === x.id)) rows.push(x);
     const ch = rows.length !== this.rows.length || fresh.length || changed.length;
     this.rows = rows; if (ch) { this.v++; this.save(); }
     return !!ch;
@@ -1237,7 +1239,8 @@ async function zipDeflate(files) {
 // ---------------- بناء الملف ----------------
 const ExcelApp = {
   EXTRA: 1500,   // صفوف فاضية جاهزة لإدخال جديد في كل قسم
-  async build(onStep) {
+  // raw: أوراق النسخة الاحتياطية الخام [[اسم، صفوف]] تُضاف مخفية (للاسترجاع)
+  async build(onStep, raw = null) {
     const step = n => onStep && onStep(n);
     for (const t of Object.values(T)) if (!t.ready && t !== T.actlog) { step(t.name); await t.load(); }
     const S = new XStyles(), C = XL_COLORS, sheets = [], names = [];
@@ -1594,10 +1597,15 @@ const ExcelApp = {
     // ===== تجميع الملف =====
     step('Excel');
     const all = [H, ...dashes, dl.sh, gd.sh, ds.sh, od.sh, cr.sh, mb.sh, mt.sh, pf.sh, em.sh, L];
+    if (raw) for (const [nm2, rws] of raw) {
+      const R2 = new XSheet(('نسخة - ' + nm2).slice(0, 31), { freeze: 1 }); R2.hiddenSheet = true;
+      rws.forEach((row, i) => row.forEach((v, c) => { if (v !== '' && v !== null && v !== undefined) R2.set(i + 1, c, v, i === 0 ? st.head : 0); }));
+      all.push(R2);
+    }
     const enc = xesc, files = [];
     files.push(['[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${all.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>`]);
     files.push(['_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`]);
-    files.push(['xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView activeTab="0"/></bookViews><sheets>${all.map((s, i) => `<sheet name="${enc(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets><definedNames>${names.map(([n, r]) => `<definedName name="${n}">${enc(r)}</definedName>`).join('')}</definedNames><calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`]);
+    files.push(['xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView activeTab="0"/></bookViews><sheets>${all.map((s, i) => `<sheet name="${enc(s.name)}" sheetId="${i + 1}"${s.hiddenSheet ? ' state="hidden"' : ''} r:id="rId${i + 1}"/>`).join('')}</sheets><definedNames>${names.map(([n, r]) => `<definedName name="${n}">${enc(r)}</definedName>`).join('')}</definedNames><calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`]);
     files.push(['xl/_rels/workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${all.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${all.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`]);
     // الرسوم: لكل ورقة لوحة رسم أعمدة (هذا العام مقابل العام الماضي)
     const chartXml = ch => { const sn = q(ch.name), ser = (sv, i) => `<c:ser><c:idx val="${i}"/><c:order val="${i}"/><c:tx><c:strRef><c:f>${xesc(sn + '!' + sv[0])}</c:f></c:strRef></c:tx><c:spPr><a:solidFill><a:srgbClr val="${sv[2]}"/></a:solidFill></c:spPr><c:invertIfNegative val="0"/><c:cat><c:strRef><c:f>${xesc(sn + '!' + ch.cat)}</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>${xesc(sn + '!' + sv[1])}</c:f></c:numRef></c:val></c:ser>`;
@@ -4048,8 +4056,13 @@ const Backup = {
       counts.push([name, rows.length]);
     }
     const stamp = nowKw().replace(/[: ]/g, '-').slice(0, 16);
-    return { blob: xlsxBlob([['معلومات النسخة', [['البيان', 'القيمة'], ['البرنامج', 'إدارة المخازن — مصنع القطامي'], ['وقت النسخة', nowKw()], ['بواسطة', Data.me.username], ['الإصدار', VERSION],
-      ...counts.map(([n, c]) => ['عدد صفوف ' + n, c])]], ...sheets]), name: `qattami-backup-${stamp}.xlsx`, counts };
+    const info = ['معلومات النسخة', [['البيان', 'القيمة'], ['البرنامج', 'إدارة المخازن — مصنع القطامي'], ['وقت النسخة', nowKw()], ['بواسطة', Data.me.username], ['الإصدار', VERSION],
+      ...counts.map(([n, c]) => ['عدد صفوف ' + n, c])]];
+    // الملف = «البرنامج في Excel» (لوحات وأقسام) + أوراق النسخة الخام مخفية للاسترجاع
+    onStep && onStep('Excel');
+    for (const t of Object.values(T)) if (t.ready) { try { await t.sync(); } catch (e) {} }
+    const x = await ExcelApp.build(onStep, [info, ...sheets]);
+    return { blob: x.blob, name: `qattami-backup-${stamp}.xlsx`, counts };
   },
   async dir() { return await Cache.get('keep:bk_dir'); },
   // حفظ نسخة: في المجلد المختار لو متاح، وإلا تنزيل عادي
@@ -4310,7 +4323,7 @@ const Admin = {
       const book = await readXlsx(await f.arrayBuffer()), items = [];
       for (const [t, name] of BACKUP) {
         if (t === 'settings') continue;
-        const rows = book[name]; if (!rows || rows.length < 2) continue;
+        const rows = book['نسخة - ' + name] || book[name]; if (!rows || rows.length < 2) continue;
         const keys = rows[0].map(String);
         if (!keys.includes('id')) continue;
         const objs = rows.slice(1).filter(r => r.some(v => v !== '')).map(r => { const o = {}; keys.forEach((k, i) => { if (r[i] !== '' && r[i] !== undefined) o[k] = r[i]; }); return o; }).filter(o => o.id !== undefined);
@@ -4318,7 +4331,7 @@ const Admin = {
       }
       if (!items.length) throw new Error('لم أجد في الملف أوراقًا من نسخة احتياطية لهذا البرنامج');
       this._restore = items;
-      const info = book['معلومات النسخة'] ? (book['معلومات النسخة'].find(r => r[0] === 'وقت النسخة') || [])[1] : '';
+      const ib = book['نسخة - معلومات النسخة'] || book['معلومات النسخة'], info = ib ? (ib.find(r => r[0] === 'وقت النسخة') || [])[1] : '';
       plan.innerHTML = `<div class="infobox">نسخة ${info ? `بتاريخ <b>${esc(info)}</b>` : ''} فيها: ${items.map(([, n, o]) => `${esc(n)} (${fmt(o.length)})`).join('، ')}.</div>
         <button class="btn danger" data-act="ad-restore-go">استرجاع هذه البيانات الآن</button>`;
     } catch (er) { box.innerHTML = `<div class="err">${esc(er.message || arErr(er))}</div>`; }
