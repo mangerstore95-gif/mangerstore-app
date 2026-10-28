@@ -215,7 +215,7 @@ const DEFAULT_URL = 'https://masodssfbppadcfqkfcp.supabase.co';
 const DEFAULT_KEY = 'sb_publishable_nAjjVRgAlfwzg3MYDn7OGQ_RH5efYKP';   // المفتاح العام (publishable) — آمن للنشر
 const DOMAIN = 'qattami.app';                 // اسم الدخول amir ⇐ amir@qattami.app (أو إيميل حقيقي مربوط بالمستخدم)
 const OLD_APP = 'https://mangerstore-system.streamlit.app';
-const VERSION = 'web-3.4';
+const VERSION = 'web-3.5';
 const PAGE = 1000;                            // أقصى عدد صفوف يرجعه Supabase في الطلب الواحد
 const LS = {
   get(k, d = null) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
@@ -4207,10 +4207,21 @@ const Admin = {
   async loadUsers() {
     const [u, l] = await Promise.all([API.select('users', 'select=id,username,full_name,is_admin,active,perms,email,created_at,last_seen,seen_online&order=is_admin.desc,username.asc').catch(() => API.select('users', 'select=id,username,full_name,is_admin,active,perms,email,created_at&order=is_admin.desc,username.asc')), API.rpc('admin_logins').catch(() => [])]);
     this.users = u; this.logins = new Map((l || []).map(x => [x.email, x.last_sign_in_at])); this._loaded = true;
+    Cache.set('keep:users', u);
+  },
+  // بدون إنترنت: آخر قائمة مستخدمين محفوظة على الجهاز (أو من ملف الطوارئ) بدل ما الصفحة تعلّق
+  async loadUsersSafe() {
+    try { await this.loadUsers(); }
+    catch (e) {
+      if (e.code !== 'network') throw e;
+      let u = await Cache.get('keep:users');
+      if (!u) u = ((await Cache.get('keep:packusers')) || []).map(x => ({ ...x.me, perms: JSON.stringify(x.me.perms || {}), active: 1, is_admin: x.me.is_admin ? 1 : 0, email: x.email }));
+      this.users = u || []; this.logins = new Map(); this._loaded = true;
+    }
   },
   render() {
     if (!Data.me.is_admin) return '<div class="err">هذه الصفحة للمدير فقط.</div>';
-    if (!this._loaded) { this.loadUsers().then(() => App.render()).catch(e => toast(arErr(e), true)); return App.loading('جارٍ تحميل المستخدمين...'); }
+    if (!this._loaded) { this.loadUsersSafe().then(() => App.render()).catch(e => toast(arErr(e), true)); return App.loading('جارٍ تحميل المستخدمين...'); }
     const tabs = [['users', 'المستخدمون والصلاحيات'], ['master', 'البيانات الأساسية'], ['log', 'سجل النشاط'], ['backup', 'النسخ الاحتياطي']];
     if (!tabs.some(t => t[0] === this.st.tab)) this.st.tab = 'users';
     return tabsBar(tabs, this.st.tab, 'ad') + this['t_' + this.st.tab]();
@@ -4606,7 +4617,7 @@ const App = {
     if (need.length) {
       $('#page').innerHTML = this.loading();
       let done = 0; const prog = () => { const el = $('#ld-p'); if (el) el.style.width = (done / need.length * 100).toFixed(0) + '%'; };
-      const how = await Promise.all(need.map(t => t.load().then(h => { done++; prog(); return h; })));
+      const how = await Promise.all(need.map(t => t.load().catch(e => { if (e.code !== 'network') throw e; t.rows = []; t.ready = true; t.v++; return 'cache'; }).then(h => { done++; prog(); return h; })));   // جدول مش موجود على الجهاز ومفيش نت: يفتح فاضي بدل ما يعلّق
       this.render();
       if (how.includes('cache')) this.sync(true);
     } else this.render();
