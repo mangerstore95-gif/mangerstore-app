@@ -215,7 +215,7 @@ const DEFAULT_URL = 'https://masodssfbppadcfqkfcp.supabase.co';
 const DEFAULT_KEY = 'sb_publishable_nAjjVRgAlfwzg3MYDn7OGQ_RH5efYKP';   // المفتاح العام (publishable) — آمن للنشر
 const DOMAIN = 'qattami.app';                 // اسم الدخول amir ⇐ amir@qattami.app (أو إيميل حقيقي مربوط بالمستخدم)
 const OLD_APP = 'https://mangerstore-system.streamlit.app';
-const VERSION = 'web-4.6';
+const VERSION = 'web-4.7';
 const PAGE = 1000;                            // أقصى عدد صفوف يرجعه Supabase في الطلب الواحد
 const LS = {
   get(k, d = null) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
@@ -668,11 +668,11 @@ function periodPicker(path, st, c) {
     + (+(st.n || 2) >= 2 ? sel(path + '.mode', st.mode || 'ly', CMPM, { label: 'نقارن بـ' }) : '');
 }
 // ---------------- مقارنة أكتر من فترة (2 لـ 5): نفس الفترة في السنين اللي فاتت، أو الفترات اللي قبلها على طول ----------------
-const CMPN = [['2', 'فترتين'], ['3', '3 فترات'], ['4', '4 فترات'], ['5', '5 فترات']];
+const CMP_MAX = 12, CMPN = Array.from({ length: CMP_MAX - 1 }, (_, i) => [String(i + 2), i ? `${i + 2} فترات` : 'فترتين']);
 const CMPM = [['ly', 'نفس الفترة في السنين اللي فاتت'], ['prev', 'الفترات اللي قبلها على طول']];
 const prevKey = (kind, key) => periodKey(kind, addDays(periodBounds(kind, key)[0], -1));
 function cmpPeriods(c, st) {
-  const n = Math.max(2, Math.min(5, +(st.n || 2))), mode = st.mode === 'prev' ? 'prev' : 'ly', days = daysBetween(c.f, c.t), out = [];
+  const n = Math.max(2, Math.min(CMP_MAX, +(st.n || 2))), mode = st.mode === 'prev' ? 'prev' : 'ly', days = daysBetween(c.f, c.t), out = [];
   let k = c.key;
   for (let i = 0; i < n; i++) {
     const [f, tFull] = periodBounds(c.kind, k);
@@ -693,7 +693,7 @@ function multiCmp(c, st, spec) {
   const names = P.list.map(p => esc(p.name) + (p.partial ? `<div class="mut" style="font-size:11px">${spanText(p.f, p.t)}</div>` : ''));
   const mrows = spec.metrics.map(m => { const vals = cols.map(m.v);
     return [`<b>${esc(m.l)}</b>`, ...vals.map((v, i) => `<b>${fmt(v, m.dec || 0)}</b>${m.unit ? ` <small>${m.unit}</small>` : ''}${i ? ch(v, vals[i - 1], m.good !== false) : ''}`)]; });
-  const m0 = spec.metrics[0], v0 = cols.map(m0.v), pal = ['var(--s5)', 'var(--s4)', 'var(--s3)', 'var(--s2)', 'var(--accent)'].slice(-P.n);
+  const m0 = spec.metrics[0], v0 = cols.map(m0.v), pal = P.list.map((_, i) => i === P.n - 1 ? 'var(--accent)' : ['var(--s2)', 'var(--s3)', 'var(--s4)', 'var(--s5)', 'var(--s1)'][(P.n - 2 - i) % 5]);
   let byHtml = '';
   if (spec.by) {
     const keys = new Map(); cols.forEach((rs, i) => { for (const r of rs) { const k = spec.by.k(r); if (!keys.has(k)) keys.set(k, Array(P.n).fill(0)); keys.get(k)[i] += spec.by.v(r); } });
