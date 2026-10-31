@@ -215,7 +215,7 @@ const DEFAULT_URL = 'https://masodssfbppadcfqkfcp.supabase.co';
 const DEFAULT_KEY = 'sb_publishable_nAjjVRgAlfwzg3MYDn7OGQ_RH5efYKP';   // المفتاح العام (publishable) — آمن للنشر
 const DOMAIN = 'qattami.app';                 // اسم الدخول amir ⇐ amir@qattami.app (أو إيميل حقيقي مربوط بالمستخدم)
 const OLD_APP = 'https://mangerstore-system.streamlit.app';
-const VERSION = 'web-4.2';
+const VERSION = 'web-4.3';
 const PAGE = 1000;                            // أقصى عدد صفوف يرجعه Supabase في الطلب الواحد
 const LS = {
   get(k, d = null) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
@@ -2272,6 +2272,28 @@ const Diesel = {
       const eff = lm ? km / lm : null, nat = this.natural(vid); return { ...x, vid, eff, nat, code: !eff && [...x.ms].every(m => m === thisMonth()) ? 'open' : this.status(eff, nat) };
     }).sort((a, b) => b.l - a.l);
     this._rep = { f, t, d };
+    // قراءات العداد خلال الفترة (القراءات شهرية: من بداية أول شهر لنهاية آخر شهر في الفترة)
+    const ms = []; for (let m = f.slice(0, 7); m <= t.slice(0, 7); m = nextMonth(m)) ms.push(m);
+    const odoVids = st.veh ? [+st.veh] : [...new Set(d.map(r => r.vid))];
+    const odoRow = vid => {
+      let s = null, e = null, km = 0, lm = 0, n = 0; const det = [];
+      for (const m of ms) {
+        const o = this.odo(m, vid), ml = all.filter(r => r.vid === vid && r.ym === m).reduce((a, r) => a + r.l, 0);
+        if (!o && !ml) continue;
+        const dd = o ? this.distance(o.start_km, o.end_km) : { km: null };
+        if (o && o.start_km !== null && o.start_km !== '' && s === null) s = +o.start_km;
+        if (o && o.end_km !== null && o.end_km !== '') e = +o.end_km;
+        if (dd.km) { km += dd.km; lm += ml; n++; }
+        det.push([monthLabel(m), o && o.start_km !== null && o.start_km !== '' ? fmt(+o.start_km) : '—', o && o.end_km !== null && o.end_km !== '' ? fmt(+o.end_km) : '—', dd.km ? fmt(dd.km) : '—', fmt(ml), dd.km && ml ? fmt(dd.km / ml, 2) : '—']);
+      }
+      const v = Data.veh.get(vid) || {};
+      return { vid, v: v.number || '?', vt: v.type || '', s, e, km, lm, n, eff: lm ? km / lm : null, nat: this.natural(vid), det };
+    };
+    const odoRows = odoVids.map(odoRow).sort((a, b) => b.km - a.km);
+    const odoCard = !odoRows.length ? '' : card(`قراءات العداد خلال الفترة`, `من بداية ${monthLabel(ms[0])} لنهاية ${monthLabel(ms[ms.length - 1])} (القراءات بتتسجّل شهريًا)${st.drv && !st.veh ? '؛ قراءات العربيات اللي السائق ده عبّى عليها' : ''}`,
+      table(['السيارة', 'النوع', 'عداد بداية الفترة', 'عداد نهاية الفترة', 'المسافة (كم)', 'لترات الشهور المحسوبة', 'المعدل (كم/لتر)', 'المعدل الطبيعي'],
+        odoRows.map(x => [esc(x.v), esc(x.vt), x.s === null ? '—' : fmt(x.s), x.e === null ? '—' : fmt(x.e), x.km ? fmt(x.km) : '—', x.lm ? fmt(x.lm) : '—', x.eff ? fmt(x.eff, 2) : '—', fmt(x.nat, 1)]), { num: [2, 3, 4, 5, 6, 7], max: 420 })
+      + (odoRows.length === 1 && odoRows[0].det.length > 1 ? `<h4 style="margin:14px 0 6px">شهر بشهر</h4>` + table(['الشهر', 'بداية الشهر', 'نهاية الشهر', 'المسافة (كم)', 'اللترات', 'المعدل (كم/لتر)'], odoRows[0].det, { num: [1, 2, 3, 4, 5], max: 420 }) : ''), 's12');
     return `<div class="card" style="margin-bottom:14px"><h3>استعلام: لترات سائق أو سيارة خلال فترة</h3>
       <div class="filters" style="margin-top:8px">${periodControls('ds.q', st)}${sel('ds.q.veh', st.veh, vehs, { label: 'السيارة', all: 'الكل' })}${sel('ds.q.drv', st.drv, drvs, { label: 'السائق', all: 'الكل' })}</div>
       <div class="period"><span class="box">📅 ${spanText(f, t)}${st.veh ? ' — ' + esc((Data.veh.get(+st.veh) || {}).number) : ''}${st.drv ? ' — ' + esc((Data.emp.get(+st.drv) || {}).name) : ''}</span>
@@ -2282,6 +2304,7 @@ const Diesel = {
         ${card('حسب السيارة', '', table(['السيارة', 'اللترات', 'التعبئات'], byVeh.map(([k, x]) => [esc(k), fmt(x.l), fmt(x.n)]), { num: [1, 2], max: 360 }))}
         ${card('حسب الشهر', '', table(['الشهر', 'اللترات', 'التعبئات'], byMon.map(([k, x]) => [monthLabel(k), fmt(x.l), fmt(x.n)]), { num: [1, 2], max: 360 }))}</div>`
         : '<div class="empty">لا توجد تعبئات مطابقة</div>'}</div>
+      ${odoCard ? `<div style="margin-bottom:14px">${odoCard}</div>` : ''}
       ${card('تقرير كل مركبة (جميع الشهور)', 'المعدل الفعلي محسوب على الشهور التي لها قراءات عداد كاملة',
         table(['السيارة', 'النوع', 'إجمالي اللترات', 'عدد الشهور', 'المعدل الفعلي', 'المعدل الطبيعي', 'الحالة'],
           perRows.map(x => [esc(x.v), esc(x.vt), fmt(x.l), x.ms.size, x.eff ? fmt(x.eff, 2) : '—', fmt(x.nat, 1), pill(x.code)]), { num: [2, 3, 4, 5] }))}`;
