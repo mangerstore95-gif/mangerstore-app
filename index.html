@@ -215,7 +215,7 @@ const DEFAULT_URL = 'https://masodssfbppadcfqkfcp.supabase.co';
 const DEFAULT_KEY = 'sb_publishable_nAjjVRgAlfwzg3MYDn7OGQ_RH5efYKP';   // المفتاح العام (publishable) — آمن للنشر
 const DOMAIN = 'qattami.app';                 // اسم الدخول amir ⇐ amir@qattami.app (أو إيميل حقيقي مربوط بالمستخدم)
 const OLD_APP = 'https://mangerstore-system.streamlit.app';
-const VERSION = 'web-4.8';
+const VERSION = 'web-5.0';
 const PAGE = 1000;                            // أقصى عدد صفوف يرجعه Supabase في الطلب الواحد
 const LS = {
   get(k, d = null) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
@@ -544,7 +544,7 @@ const sel = (path, cur, items, { label = '', all = null, cls = '' } = {}) =>
   `<div class="f ${cls}">${label ? `<label>${label}</label>` : ''}<select data-k="${path}">${all !== null ? opt('', all, cur) : ''}${items.map(([v, l]) => opt(v, l, cur)).join('')}</select></div>`;
 // ---------------- كل القوائم المنسدلة بالترتيب الأبجدي ----------------
 // ماعدا القوائم اللي ليها ترتيب طبيعي (الفترات والشهور والأنواع والصلاحيات...). «الكل / — اختر —» تفضل فوق، و«+ جديد» تفضل تحت
-const KEEP_SEL = /\.(preset|p|n|mode|kind|month|f|t|show|ref|batch|hidden|page)$/;
+const KEEP_SEL = /\.(preset|p|n|mode|kind|month|f|t|show|ref|batch|hidden|page|per)$/;
 const abc = (a, b) => a.localeCompare(b, 'ar', { numeric: true, sensitivity: 'base' });
 function sortSelect(s) {
   if (s.dataset.sorted || 'keep' in s.dataset || s.dataset.perm || s.dataset.f === 'severity' || ['bk-hours', 'ne-sev'].includes(s.id) || (s.dataset.k && KEEP_SEL.test(s.dataset.k))) return;
@@ -4695,25 +4695,40 @@ const Account = {
 // - «الرقم ده صح، تجاهل» بيخفي التنبيه للكل (محفوظ على السيرفر)
 // ============================================================================
 const FIX_SECS = { diesel: 'تعبئة الديزل', cars: 'صيانة السيارات', deliveries: 'الأوردرات المسلّمة', goods: 'البضاعة المسلّمة', materials: 'صلاحية المواد الخام', performance: 'مؤشر الأداء القياسي', employees: 'تقييم موظفي المخزن' };
+const li = t => t.startsWith('ال') ? 'ل' + t.slice(1) : 'ل' + t;   // «للعربية 55224» / «لكل العربيات»
+const RULE_NAMES = { 'zero:ref': 'تعبئة بصفر لتر', 'big:ref': 'لترات كتير بشكل غريب', 'dup:ref': 'تعبئة متكررة', 'odo:err': 'قراءات العداد الغلط', 'odo:mis': 'بداية الشهر مختلفة عن نهاية اللي قبله',
+  'zero:exp': 'فاتورة بصفر', 'big:exp': 'مبلغ صيانة كبير بشكل غريب', 'dup:exp': 'رقم فاتورة متكرر', 'zero:dl': 'سند أوردرات بصفر', 'big:dl': 'عدد أوردرات كبير بشكل غريب', 'dup:dl': 'سند أوردرات متكرر',
+  'zero:gd': 'سند بضاعة بصفر', 'dup:gd': 'سند بضاعة متكرر', 'exp:b': 'الانتهاء قبل الإنتاج', 'zero:b': 'دفعة بصفر', 'over:b': 'المسحوب أكبر من الدفعة', 'zero:i': 'تحويل بصفر',
+  'zero:pf': 'جرد بصفر أصناف', 'err:pf': 'الأخطاء أكبر من الأصناف', future: 'تاريخ في المستقبل', old: 'تاريخ قديم جدًا' };
 const medMap = m => new Map([...m].map(([k, a]) => [k, [a.length, median(a)]]));
 const median = a => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 const Fixes = {
   key: 'fixes', title: 'التصحيحات', icon: '🛠️',
   get tables() { return [...new Set(['settings', ...Object.keys(FIX_SECS).filter(k => Data.level(k) >= 1).flatMap(k => PAGES[k].tables)])]; },
-  st: { list: { sec: '', kind: '', q: '', vids: '', more: 0, hidden: '' } },
-  // ---------------- المتجاهَلة (للكل) ----------------
-  dismissed() { const r = T.settings.rows.find(x => x.key === 'fix_dismissed'); try { return new Set(JSON.parse(r && r.value || '[]')); } catch (e) { return new Set(); } },
+  st: { list: { sec: '', kind: '', q: '', vids: '', more: 0, hidden: '', by: '', per: 'all' } },
+  // ---------------- المتجاهَلة + اللي البرنامج اتعلّمه (محفوظين على السيرفر للكل) ----------------
+  // { d: [بصمات اتجاهلت مرة واحدة], n: { بصمة: السبب }, r: [{ rc, ent ('*' = الكل), entL, max?, why, by, at }] }
+  store() {
+    const r = T.settings.rows.find(x => x.key === 'fix_dismissed'); let v = null;
+    try { v = JSON.parse(r && r.value || 'null'); } catch (e) {}
+    if (Array.isArray(v)) v = { d: v }; v = v || {};
+    return { d: v.d || [], n: v.n || {}, r: v.r || [] };
+  },
+  dismissed() { return new Set(this.store().d); },
+  // القاعدة اللي اتعلّمها البرنامج وبتخفي المشكلة دي (لو فيه)
+  learned(x, R = this.store().r) { return R.find(r => r.rc === x.rc && (r.ent === '*' || r.ent === x.ent) && (r.max === undefined || r.max === null || (x.val !== undefined && x.val <= r.max))) || null; },
   canDismiss() { return Data.level('fixes') >= 2; },
   // ---------------- القواعد ----------------
   // كل مشكلة: { sec, id, fp (بصمة: لو السند اتعدّل تتغير)، no, date, what, why, warn, fix (نص المقترح)، go: {fn, args} أو nav, lv (أقل صلاحية للتصحيح) }
   all() {
     const ver = [Data.lv, today(), ...Object.values(T).map(t => t.v)].join('.');
     if (this._v === ver) return this._all;
-    const out = [], t0 = today(), push = x => { if (typeof x.what === 'function') x.what = x.what(); out.push(x); };   // البيان بيتحسب للمشاكل بس (أسرع)
+    let curBy = '';   // مين سجّل السند اللي بنراجعه دلوقتي
+    const out = [], t0 = today(), push = x => { if (x.by === undefined) x.by = curBy; if (typeof x.what === 'function') x.what = x.what(); if (typeof x.entL === 'function') x.entL = x.entL(); out.push(x); };   // البيان بيتحسب للمشاكل بس (أسرع)
     const dateChk = (sec, id, no, date, what, go, lv = 3) => {
       if (!date) return;
-      if (date > t0) push({ sec, id, fp: `future:${sec}:${id}:${date}`, no, date, what, why: 'التاريخ في المستقبل', go, lv });
-      else if (date < '2020-01-01') push({ sec, id, fp: `old:${sec}:${id}:${date}`, no, date, what, why: 'التاريخ قديم جدًا (غالبًا اتكتب غلط)', go, lv });
+      if (date > t0) push({ sec, id, rc: 'future', fp: `future:${sec}:${id}:${date}`, no, date, what, why: 'التاريخ في المستقبل', go, lv });
+      else if (date < '2020-01-01') push({ sec, id, rc: 'old', fp: `old:${sec}:${id}:${date}`, no, date, what, why: 'التاريخ قديم جدًا (غالبًا اتكتب غلط)', go, lv });
     };
     const vName = id => (Data.veh.get(id) || {}).number || '?', eName = id => (Data.emp.get(id) || {}).name || '?';
     const can = k => Data.level(k) >= 1;
@@ -4723,17 +4738,18 @@ const Fixes = {
       for (const r of R) { if (!byV.has(r.vehicle_id)) byV.set(r.vehicle_id, []); byV.get(r.vehicle_id).push(+r.liters || 0); }
       const seen = new Map(), MV = medMap(byV);
       for (const r of R) {
-        const l = +r.liters || 0, what = () => `${vName(r.vehicle_id)} — ${fmt(l)} لتر`, go = { fn: 'dsEdit', args: [r.id] };
-        if (l <= 0) push({ sec: 'diesel', id: r.id, fp: `zero:ref:${r.id}:${l}`, no: '', date: r.date, what, why: 'تعبئة بصفر لتر', go, lv: 3 });
+        curBy = r.created_by || '';
+        const l = +r.liters || 0, what = () => `${vName(r.vehicle_id)} — ${fmt(l)} لتر`, go = { fn: 'dsEdit', args: [r.id] }, E = { ent: 'v' + r.vehicle_id, entL: () => `العربية ${vName(r.vehicle_id)}`, entsL: 'كل العربيات', val: l, unit: 'لتر' };
+        if (l <= 0) push({ ...E, rc: 'zero:ref', sec: 'diesel', id: r.id, fp: `zero:ref:${r.id}:${l}`, no: '', date: r.date, what, why: 'تعبئة بصفر لتر', go, lv: 3 });
         const [n, md] = MV.get(r.vehicle_id);
-        if (n >= 5 && l > md * 3 && l - md > 100) push({ sec: 'diesel', id: r.id, fp: `big:ref:${r.id}:${l}`, no: '', date: r.date, what, why: `لترات كتير بشكل غريب: المعتاد للعربية دي حوالي ${fmt(md)} لتر`, warn: true, go, lv: 3 });
+        if (n >= 5 && l > md * 3 && l - md > 100) push({ ...E, rc: 'big:ref', sec: 'diesel', id: r.id, fp: `big:ref:${r.id}:${l}`, no: '', date: r.date, what, why: `لترات كتير بشكل غريب: المعتاد للعربية دي حوالي ${fmt(md)} لتر`, warn: true, go, lv: 3 });
         const k = `${r.vehicle_id}|${r.date}|${l}`;
-        if (seen.has(k)) push({ sec: 'diesel', id: r.id, fp: `dup:ref:${r.id}:${k}`, no: '', date: r.date, what, why: 'تعبئة متكررة: نفس العربية ونفس اليوم ونفس اللترات', go, lv: 3 }); else seen.set(k, r.id);
+        if (seen.has(k)) push({ ...E, rc: 'dup:ref', sec: 'diesel', id: r.id, fp: `dup:ref:${r.id}:${k}`, no: '', date: r.date, what, why: 'تعبئة متكررة: نفس العربية ونفس اليوم ونفس اللترات', go, lv: 3 }); else seen.set(k, r.id);
         dateChk('diesel', r.id, '', r.date, what, go);
       }
       if (T.odometer.ready) for (const vid of byV.keys()) for (const x of Diesel.issues(vid)) {
         const fix = [x.fs !== null ? `البداية: ${fmt(x.fs)}` : '', x.fe !== null ? `النهاية: ${fmt(x.fe)}` : ''].filter(Boolean).join(' · ');
-        push({ sec: 'diesel', id: `odo-${vid}-${x.m}`, vid, fp: `odo:${vid}:${x.m}:${x.s}:${x.e}:${x.why}`, no: 'قراءات العداد', date: x.m, month: true, what: `${vName(vid)} — ${monthLabel(x.m)} — البداية ${x.s === null ? 'فاضية' : fmt(x.s)} · النهاية ${x.e === null ? 'فاضية' : fmt(x.e)}`,
+        push({ by: (Diesel.odo(x.m, vid) || {}).updated_by || '', rc: x.warn ? 'odo:mis' : 'odo:err', ent: 'v' + vid, entL: () => `العربية ${vName(vid)}`, entsL: 'كل العربيات', sec: 'diesel', id: `odo-${vid}-${x.m}`, vid, fp: `odo:${vid}:${x.m}:${x.s}:${x.e}:${x.why}`, no: 'قراءات العداد', date: x.m, month: true, what: `${vName(vid)} — ${monthLabel(x.m)} — البداية ${x.s === null ? 'فاضية' : fmt(x.s)} · النهاية ${x.e === null ? 'فاضية' : fmt(x.e)}`,
           why: x.why, warn: x.warn, fix, go: { fn: 'odo', args: [x.m, vid, { s: x.fs ?? '', e: x.fe ?? '' }] }, lv: 2 });
       }
     }
@@ -4743,12 +4759,13 @@ const Fixes = {
       for (const r of E) { if (!byV.has(r.vehicle_id)) byV.set(r.vehicle_id, []); byV.get(r.vehicle_id).push(+r.amount || 0); }
       const ME = medMap(byV);
       for (const r of [...E].sort((a, b) => a.id - b.id)) {
-        const a = +r.amount || 0, what = () => `${vName(r.vehicle_id)} — ${fmt(a, 1)} د.ك`, go = { fn: 'edit', args: ['cars', r.id] };
-        if (a <= 0) push({ sec: 'cars', id: r.id, fp: `zero:exp:${r.id}:${a}`, no: r.invoice_no, date: r.date, what, why: 'فاتورة مبلغها صفر', go, lv: 3 });
+        curBy = r.created_by || '';
+        const a = +r.amount || 0, what = () => `${vName(r.vehicle_id)} — ${fmt(a, 1)} د.ك`, go = { fn: 'edit', args: ['cars', r.id] }, E = { ent: 'v' + r.vehicle_id, entL: () => `العربية ${vName(r.vehicle_id)}`, entsL: 'كل العربيات', val: a, unit: 'د.ك' };
+        if (a <= 0) push({ ...E, rc: 'zero:exp', sec: 'cars', id: r.id, fp: `zero:exp:${r.id}:${a}`, no: r.invoice_no, date: r.date, what, why: 'فاتورة مبلغها صفر', go, lv: 3 });
         const [cnt, md] = ME.get(r.vehicle_id);
-        if (cnt >= 5 && a > md * 5 && a - md > 100) push({ sec: 'cars', id: r.id, fp: `big:exp:${r.id}:${a}`, no: r.invoice_no, date: r.date, what, why: `مبلغ كبير بشكل غريب: المعتاد للعربية دي حوالي ${fmt(md, 1)} د.ك`, warn: true, go, lv: 3 });
+        if (cnt >= 5 && a > md * 5 && a - md > 100) push({ ...E, rc: 'big:exp', sec: 'cars', id: r.id, fp: `big:exp:${r.id}:${a}`, no: r.invoice_no, date: r.date, what, why: `مبلغ كبير بشكل غريب: المعتاد للعربية دي حوالي ${fmt(md, 1)} د.ك`, warn: true, go, lv: 3 });
         const n = String(r.invoice_no || '').trim();
-        if (n) { if (nos.has(n)) push({ sec: 'cars', id: r.id, fp: `dup:exp:${r.id}:${n}`, no: n, date: r.date, what, why: 'رقم الفاتورة متكرر في فاتورة تانية', go, lv: 3 }); else nos.set(n, r.id); }
+        if (n) { if (nos.has(n)) push({ ...E, rc: 'dup:exp', sec: 'cars', id: r.id, fp: `dup:exp:${r.id}:${n}`, no: n, date: r.date, what, why: 'رقم الفاتورة متكرر في فاتورة تانية', go, lv: 3 }); else nos.set(n, r.id); }
         dateChk('cars', r.id, r.invoice_no, r.date, what, go);
       }
     }
@@ -4758,12 +4775,13 @@ const Fixes = {
       for (const r of D) { if (!byD.has(r.driver_id)) byD.set(r.driver_id, []); byD.get(r.driver_id).push(+r.orders || 0); }
       const MD = medMap(byD);
       for (const r of [...D].sort((a, b) => a.id - b.id)) {
-        const o = +r.orders || 0, what = () => `${eName(r.driver_id)} — ${vName(r.vehicle_id)} — ${(Data.reg.get(r.region_id) || {}).name || '?'} — ${fmt(o)} أوردر`, go = { fn: 'edit', args: ['deliveries', r.id] };
-        if (o <= 0) push({ sec: 'deliveries', id: r.id, fp: `zero:dl:${r.id}:${o}`, no: r.record_no, date: r.date, what, why: 'عدد الأوردرات صفر', go, lv: 3 });
+        curBy = r.created_by || '';
+        const o = +r.orders || 0, what = () => `${eName(r.driver_id)} — ${vName(r.vehicle_id)} — ${(Data.reg.get(r.region_id) || {}).name || '?'} — ${fmt(o)} أوردر`, go = { fn: 'edit', args: ['deliveries', r.id] }, E = { ent: 'd' + r.driver_id, entL: () => `السائق ${eName(r.driver_id)}`, entsL: 'كل السواقين', val: o, unit: 'أوردر' };
+        if (o <= 0) push({ ...E, rc: 'zero:dl', sec: 'deliveries', id: r.id, fp: `zero:dl:${r.id}:${o}`, no: r.record_no, date: r.date, what, why: 'عدد الأوردرات صفر', go, lv: 3 });
         const [n, md] = MD.get(r.driver_id);
-        if (n >= 5 && o > md * 3 && o - md >= 10) push({ sec: 'deliveries', id: r.id, fp: `big:dl:${r.id}:${o}`, no: r.record_no, date: r.date, what, why: `عدد أوردرات كبير بشكل غريب: المعتاد للسائق ده حوالي ${fmt(md)}`, warn: true, go, lv: 3 });
+        if (n >= 5 && o > md * 3 && o - md >= 10) push({ ...E, rc: 'big:dl', sec: 'deliveries', id: r.id, fp: `big:dl:${r.id}:${o}`, no: r.record_no, date: r.date, what, why: `عدد أوردرات كبير بشكل غريب: المعتاد للسائق ده حوالي ${fmt(md)}`, warn: true, go, lv: 3 });
         const k = [r.date, r.driver_id, r.vehicle_id, r.region_id, r.factory_id, r.warehouse_id, o].join('|');
-        if (seen.has(k)) push({ sec: 'deliveries', id: r.id, fp: `dup:dl:${r.id}:${k}`, no: r.record_no, date: r.date, what, why: 'سند متكرر: نفس اليوم والسائق والعربية والمنطقة والعدد', go, lv: 3 }); else seen.set(k, r.id);
+        if (seen.has(k)) push({ ...E, rc: 'dup:dl', sec: 'deliveries', id: r.id, fp: `dup:dl:${r.id}:${k}`, no: r.record_no, date: r.date, what, why: 'سند متكرر: نفس اليوم والسائق والعربية والمنطقة والعدد', go, lv: 3 }); else seen.set(k, r.id);
         dateChk('deliveries', r.id, r.record_no, r.date, what, go);
       }
     }
@@ -4772,10 +4790,11 @@ const Fixes = {
       const L = new Map(), G = new Map(T.ggroups.rows.map(g => [g.id, g.name])), seen = new Map();
       for (const l of T.glines.rows) { if (!L.has(l.record_id)) L.set(l.record_id, []); L.get(l.record_id).push(l); }
       for (const r of [...T.grec.rows].sort((a, b) => a.id - b.id)) {
-        const ls = L.get(r.id) || [], tot = ls.reduce((s, l) => s + (+l.qty || 0), 0), what = () => `${G.get(r.group_id) || '?'} — ${fmt(tot)}`, go = { fn: 'edit', args: ['goods', r.id] };
-        if (tot <= 0) push({ sec: 'goods', id: r.id, fp: `zero:gd:${r.id}:${tot}`, no: r.record_no, date: r.date, what, why: 'سند كل كمياته صفر', go, lv: 3 });
+        curBy = r.created_by || '';
+        const ls = L.get(r.id) || [], tot = ls.reduce((s, l) => s + (+l.qty || 0), 0), what = () => `${G.get(r.group_id) || '?'} — ${fmt(tot)}`, go = { fn: 'edit', args: ['goods', r.id] }, E = { ent: 'g' + r.group_id, entL: () => `المجموعة ${G.get(r.group_id) || '?'}`, entsL: 'كل المجموعات' };
+        if (tot <= 0) push({ ...E, rc: 'zero:gd', sec: 'goods', id: r.id, fp: `zero:gd:${r.id}:${tot}`, no: r.record_no, date: r.date, what, why: 'سند كل كمياته صفر', go, lv: 3 });
         const k = [r.date, r.group_id, r.factory_id, r.warehouse_id, ls.map(l => l.item_id + ':' + l.qty).sort().join(',')].join('|');
-        if (tot > 0 && seen.has(k)) push({ sec: 'goods', id: r.id, fp: `dup:gd:${r.id}:${k}`, no: r.record_no, date: r.date, what, why: 'سند متكرر: نفس اليوم والمجموعة ونفس الكميات', go, lv: 3 }); else seen.set(k, r.id);
+        if (tot > 0 && seen.has(k)) push({ ...E, rc: 'dup:gd', sec: 'goods', id: r.id, fp: `dup:gd:${r.id}:${k}`, no: r.record_no, date: r.date, what, why: 'سند متكرر: نفس اليوم والمجموعة ونفس الكميات', go, lv: 3 }); else seen.set(k, r.id);
         dateChk('goods', r.id, r.record_no, r.date, what, go);
       }
     }
@@ -4783,58 +4802,66 @@ const Fixes = {
     if (can('materials') && T.batches.ready && T.issues.ready) {
       const used = groupSum(T.issues.rows, r => r.batch_id, r => +r.qty || 0), M = new Map(T.mats.rows.map(m => [m.id, m.name]));
       for (const b of T.batches.rows) {
-        const q = +b.total_qty || 0, u = used.get(b.id) || 0, what = () => `${M.get(b.material_id) || '?'} — ${fmt(q)} كجم`, go = { fn: 'batch', args: [b.id] };
-        if (b.prod_date && b.expiry_date && b.expiry_date < b.prod_date) push({ sec: 'materials', id: 'b' + b.id, fp: `exp:b:${b.id}:${b.prod_date}:${b.expiry_date}`, no: b.batch_no, date: b.arrival_date, what, why: 'تاريخ الانتهاء قبل تاريخ الإنتاج', go, lv: 3 });
-        if (q <= 0) push({ sec: 'materials', id: 'b' + b.id, fp: `zero:b:${b.id}:${q}`, no: b.batch_no, date: b.arrival_date, what, why: 'دفعة كميتها صفر', go, lv: 3 });
-        if (u - q > 0.001) push({ sec: 'materials', id: 'b' + b.id, fp: `over:b:${b.id}:${q}:${u}`, no: b.batch_no, date: b.arrival_date, what, why: `المسحوب من الدفعة (${fmt(u)} كجم) أكبر من كميتها`, go, lv: 3 });
+        curBy = b.created_by || '';
+        const q = +b.total_qty || 0, u = used.get(b.id) || 0, what = () => `${M.get(b.material_id) || '?'} — ${fmt(q)} كجم`, go = { fn: 'batch', args: [b.id] }, E = { ent: 'm' + b.material_id, entL: () => `الخامة ${M.get(b.material_id) || '?'}`, entsL: 'كل الخامات' };
+        if (b.prod_date && b.expiry_date && b.expiry_date < b.prod_date) push({ ...E, rc: 'exp:b', sec: 'materials', id: 'b' + b.id, fp: `exp:b:${b.id}:${b.prod_date}:${b.expiry_date}`, no: b.batch_no, date: b.arrival_date, what, why: 'تاريخ الانتهاء قبل تاريخ الإنتاج', go, lv: 3 });
+        if (q <= 0) push({ ...E, rc: 'zero:b', sec: 'materials', id: 'b' + b.id, fp: `zero:b:${b.id}:${q}`, no: b.batch_no, date: b.arrival_date, what, why: 'دفعة كميتها صفر', go, lv: 3 });
+        if (u - q > 0.001) push({ ...E, rc: 'over:b', sec: 'materials', id: 'b' + b.id, fp: `over:b:${b.id}:${q}:${u}`, no: b.batch_no, date: b.arrival_date, what, why: `المسحوب من الدفعة (${fmt(u)} كجم) أكبر من كميتها`, go, lv: 3 });
         dateChk('materials', 'b' + b.id, b.batch_no, b.arrival_date, what, go);
       }
       for (const i of T.issues.rows) {
+        curBy = i.created_by || '';
         const q = +i.qty || 0, what = () => `${i.issued_to || '?'} — ${fmt(q)} كجم`, go = { fn: 'issue', args: [i.id] };
-        if (q <= 0) push({ sec: 'materials', id: 'i' + i.id, fp: `zero:i:${i.id}:${q}`, no: i.issue_no, date: i.date, what, why: 'سند تحويل كميته صفر', go, lv: 3 });
+        if (q <= 0) push({ rc: 'zero:i', sec: 'materials', id: 'i' + i.id, fp: `zero:i:${i.id}:${q}`, no: i.issue_no, date: i.date, what, why: 'سند تحويل كميته صفر', go, lv: 3 });
         dateChk('materials', 'i' + i.id, i.issue_no, i.date, what, go);
       }
     }
     // ---- الجرد ----
     if (can('performance') && T.perf.ready) for (const r of T.perf.rows) {
-      const it = +r.items_count || 0, er = +r.errors || 0, what = () => `${eName(r.worker_id)} — ${fmt(it)} صنف، ${fmt(er)} خطأ`, go = { fn: 'edit', args: ['performance', r.id] };
-      if (it <= 0) push({ sec: 'performance', id: r.id, fp: `zero:pf:${r.id}:${it}`, no: r.record_no, date: r.date, what, why: 'جرد بصفر أصناف', go, lv: 3 });
-      if (er > it && it > 0) push({ sec: 'performance', id: r.id, fp: `err:pf:${r.id}:${it}:${er}`, no: r.record_no, date: r.date, what, why: 'عدد الأخطاء أكبر من عدد الأصناف', go, lv: 3 });
+      curBy = r.created_by || '';
+      const it = +r.items_count || 0, er = +r.errors || 0, what = () => `${eName(r.worker_id)} — ${fmt(it)} صنف، ${fmt(er)} خطأ`, go = { fn: 'edit', args: ['performance', r.id] }, E = { ent: 'w' + r.worker_id, entL: () => `العامل ${eName(r.worker_id)}`, entsL: 'كل العمال' };
+      if (it <= 0) push({ ...E, rc: 'zero:pf', sec: 'performance', id: r.id, fp: `zero:pf:${r.id}:${it}`, no: r.record_no, date: r.date, what, why: 'جرد بصفر أصناف', go, lv: 3 });
+      if (er > it && it > 0) push({ ...E, rc: 'err:pf', sec: 'performance', id: r.id, fp: `err:pf:${r.id}:${it}:${er}`, no: r.record_no, date: r.date, what, why: 'عدد الأخطاء أكبر من عدد الأصناف', go, lv: 3 });
       dateChk('performance', r.id, r.record_no, r.date, what, go);
     }
     // ---- تقييم الموظفين ----
-    if (can('employees') && T.emprec.ready) for (const r of T.emprec.rows) dateChk('employees', r.id, r.record_no, r.date, eName(r.employee_id), { fn: 'edit', args: ['employees', r.id] });
+    if (can('employees') && T.emprec.ready) for (const r of T.emprec.rows) { curBy = r.created_by || ''; dateChk('employees', r.id, r.record_no, r.date, eName(r.employee_id), { fn: 'edit', args: ['employees', r.id] }); }
     out.sort((a, b) => (a.warn ? 1 : 0) - (b.warn ? 1 : 0) || String(b.date || '').localeCompare(String(a.date || '')));
     this._v = ver; this._all = out; return out;
   },
-  open() { const d = this.dismissed(); return this.all().filter(x => !d.has(x.fp)); },
+  open() { const S = this.store(), d = new Set(S.d); return this.all().filter(x => !d.has(x.fp) && !this.learned(x, S.r)); },
   count() { try { return this.open().filter(x => !x.warn).length; } catch (e) { return 0; } },
   // ---------------- الصفحة ----------------
   render() {
     if (Data.level('fixes') < 1) return `<div class="err">ليست لديك صلاحية على قسم التصحيحات. اطلبها من المدير.</div>`;
-    const st = this.st.list, d = this.dismissed(), all = this.all(), hidden = st.hidden === '1';
-    let L = all.filter(x => hidden ? d.has(x.fp) : !d.has(x.fp));
-    const errs = L.filter(x => !x.warn).length, notes = L.length - errs;
+    const st = this.st.list, S = this.store(), d = new Set(S.d), all = this.all(), hidden = st.hidden === '1';
+    if (st.hidden === '2') return this.learnedView(S, all);
+    if (st.hidden === '3') return this.empView(S, all);
+    let L = all.filter(x => { const off = d.has(x.fp) || !!this.learned(x, S.r); return hidden ? off : !off; });
+    const errs = L.filter(x => !x.warn).length, notes = L.length - errs, nLearn = all.filter(x => !d.has(x.fp) && this.learned(x, S.r)).length;
     const bySec = Object.keys(FIX_SECS).map(k => [k, L.filter(x => x.sec === k).length]).filter(([, n]) => n);
     if (st.sec) L = L.filter(x => x.sec === st.sec);
     if (st.kind === 'err') L = L.filter(x => !x.warn); else if (st.kind === 'note') L = L.filter(x => x.warn);
     if (st.vids) { const v = new Set(st.vids.split(',').map(Number)); L = L.filter(x => x.vid && v.has(x.vid)); }
+    if (st.by) L = L.filter(x => x.by === st.by);
     if (st.q) { const q = st.q.trim().toLowerCase(); L = L.filter(x => [x.no, x.what, x.why, x.date].join(' ').toLowerCase().includes(q)); }
     const shown = L.slice(0, 200 + st.more * 200);
     const row = x => `<tr><td>${esc(FIX_SECS[x.sec])}</td><td>${esc(x.no || '')}</td><td>${x.month ? '' : esc(x.date || '')}</td><td style="white-space:normal">${esc(x.what)}</td>
-      <td class="${x.warn ? 'mut' : 'st-bad'}" style="white-space:normal;min-width:220px">${x.warn ? 'ملاحظة: ' : ''}${esc(x.why)}</td><td style="white-space:normal">${x.fix ? `<b>${esc(x.fix)}</b>` : ''}</td>
+      <td class="${x.warn ? 'mut' : 'st-bad'}" style="white-space:normal;min-width:220px">${x.warn ? 'ملاحظة: ' : ''}${esc(x.why)}</td><td style="white-space:normal">${x.fix ? `<b>${esc(x.fix)}</b>` : ''}</td><td>${esc(this.uname(x.by))}</td>
       <td style="white-space:nowrap">${Data.level(x.sec) >= x.lv ? `<button class="btn sm" data-act="fx-go" data-i="${all.indexOf(x)}">صحّح ←</button>` : ''}
-        ${this.canDismiss() ? (hidden ? `<button class="btn ghost sm" data-act="fx-undo" data-fp="${esc(x.fp)}">رجّعه</button>` : `<button class="btn ghost sm" data-act="fx-skip" data-fp="${esc(x.fp)}" title="الرقم ده صح؛ ميظهرش تاني">✓ صح، تجاهل</button>`) : ''}</td></tr>`;
+        ${this.canDismiss() ? (hidden ? (d.has(x.fp) ? `<button class="btn ghost sm" data-act="fx-undo" data-fp="${esc(x.fp)}">رجّعه</button>` : `<span class="mut" style="font-size:12px">اتعلّمها: ${esc((this.learned(x, S.r) || {}).why || '')}</span>`) : `<button class="btn ghost sm" data-act="fx-skip" data-i="${all.indexOf(x)}" title="الرقم ده صح؛ قولّي ليه علشان أتعلّم">✓ صح، تجاهل</button>`) : ''}
+        ${hidden && S.n[x.fp] ? `<div class="mut" style="font-size:12px;white-space:normal">السبب: ${esc(S.n[x.fp])}</div>` : ''}</td></tr>`;
     return `<div class="card hero" style="margin-bottom:14px"><h2>${hidden ? 'التنبيهات اللي اتجاهلت' : errs + notes ? `<span>محتاجة تصحيح:</span> <bdi>${fmt(errs)}</bdi>${notes ? ` · <span>ملاحظات:</span> <bdi>${fmt(notes)}</bdi>` : ''}` : 'كل البيانات سليمة ✓'}</h2>
         <p>البرنامج بيراجع اللي اتسجّل في كل الأقسام. دوس «صحّح ←» يفتحلك السند على طول، ولو الرقم صح فعلًا دوس «✓ صح، تجاهل» وميظهرش تاني.</p>
-        <p>الأحمر غلط أكيد، والرمادي ملاحظة اتأكد منها.</p>
+        <p>الأحمر غلط أكيد، والرمادي ملاحظة اتأكد منها.${nLearn && !hidden ? ` وفيه ${fmt(nLearn)} تنبيه مخفي بسبب حاجات اتعلّمها البرنامج منك.` : ''}</p>
         <div class="chips">${bySec.map(([k, n]) => `<button class="chip" data-act="fx-sec" data-sec="${st.sec === k ? '' : k}" style="cursor:pointer;${st.sec === k ? 'border-color:var(--accent)' : ''}">${esc(FIX_SECS[k])}: ${fmt(n)}</button>`).join('')}</div></div>
       <div class="filters">${sel('fx.list.sec', st.sec, Object.entries(FIX_SECS), { label: 'القسم', all: 'كل الأقسام' })}
         ${sel('fx.list.kind', st.kind, [['err', 'الغلط الأكيد بس'], ['note', 'الملاحظات بس']], { label: 'النوع', all: 'الكل' })}
         <div class="f"><label>بحث</label><input data-k="fx.list.q" data-live="1" value="${esc(st.q)}" placeholder="رقم سند، عربية، سائق..."></div>
-        ${sel('fx.list.hidden', st.hidden, [['1', 'اللي اتجاهلت']], { label: 'عرض', all: 'المفتوحة' })}
+        ${sel('fx.list.hidden', st.hidden, [['1', 'اللي اتجاهلت'], ['2', `🧠 اللي اتعلّمه البرنامج (${S.r.length})`], ['3', '👤 أخطاء كل موظف']], { label: 'عرض', all: 'المفتوحة' })}
+        ${st.by ? `<div class="f"><label>&nbsp;</label><button class="btn ghost sm" data-act="fx-clearby">✕ إلغاء فلتر الموظف: ${esc(this.uname(st.by))}</button></div>` : ''}
         ${st.vids ? `<div class="f"><label>&nbsp;</label><button class="btn ghost sm" data-act="fx-clear">✕ إلغاء فلتر العربية</button></div>` : ''}</div>
-      <div class="card">${shown.length ? `<div class="tbl" style="max-height:none"><table><thead><tr><th>القسم</th><th>رقم السند</th><th>التاريخ</th><th>البيان</th><th>المشكلة</th><th>الرقم المقترح</th><th></th></tr></thead><tbody>${shown.map(row).join('')}</tbody></table></div>
+      <div class="card">${shown.length ? `<div class="tbl" style="max-height:none"><table><thead><tr><th>القسم</th><th>رقم السند</th><th>التاريخ</th><th>البيان</th><th>المشكلة</th><th>الرقم المقترح</th><th>سجّلها</th><th></th></tr></thead><tbody>${shown.map(row).join('')}</tbody></table></div>
         ${L.length > shown.length ? `<div style="margin-top:12px"><button class="btn ghost" data-act="fx-more">عرض المزيد (${fmt(L.length - shown.length)})</button></div>` : ''}` : '<div class="ok">مفيش حاجة هنا ✓</div>'}</div>`;
   },
   // يفتح المشكلة: من غير ما نسيب صفحة التصحيحات لو ينفع (نافذة التعديل)، أو ننقلك على المكان
@@ -4848,21 +4875,99 @@ const Fixes = {
     if (x.go.fn === 'dsEdit') return Diesel.openEdit(a0);
     if (x.go.fn === 'dsMonth') { Diesel.st.tab = 'mon'; LS.set('qw_ds_tab', 'mon'); Diesel.st.mon.month = a0; return App.open('diesel'); }
   },
-  async setDismissed(fp, on) {
-    const d = this.dismissed(); if (on) d.add(fp); else d.delete(fp);
-    const live = new Set(this.all().map(x => x.fp)), value = JSON.stringify([...d].filter(k => live.has(k)));
-    try { await API.upsert('settings', [{ key: 'fix_dismissed', value }], 'key'); await T.settings.sync(); }
-    catch (e) { return toast(e.code === '42501' || e.status === 403 ? 'محتاج تشغّل ملف «التصحيحات.sql» في Supabase مرة واحدة الأول' : arErr(e), true); }
-    toast(on ? '✓ اتجاهل؛ مش هيظهر تاني' : '✓ رجع للقائمة'); App.render(); App.fixBadge();
+  async save(S, msg) {
+    const live = new Set(this.all().map(x => x.fp)), d = S.d.filter(k => live.has(k)), n = {};
+    for (const k of d) if (S.n[k]) n[k] = S.n[k];
+    try { await API.upsert('settings', [{ key: 'fix_dismissed', value: JSON.stringify({ d, n, r: S.r }) }], 'key'); await T.settings.sync(); }
+    catch (e) { toast(e.code === '42501' || e.status === 403 ? 'محتاج تشغّل ملف «التصحيحات.sql» في Supabase مرة واحدة الأول' : arErr(e), true); return false; }
+    this._v = null; toast(msg); closeModal(); App.render(); App.fixBadge(); return true;
   },
+  async setDismissed(fp, on) { const S = this.store(); S.d = on ? [...new Set([...S.d, fp])] : S.d.filter(k => k !== fp); if (!on) delete S.n[fp]; return this.save(S, on ? '✓ اتجاهل' : '✓ رجع للقائمة'); },
+  // «صح، تجاهل»: البرنامج بيسأل ليه، ويتعلّم من الإجابة
+  askWhy(i) {
+    const x = this.all()[i]; if (!x) return; const rn = RULE_NAMES[x.rc] || x.why, hasV = x.val !== undefined && x.val !== null;
+    const opt = (v, html, on) => `<label style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:12px;margin-bottom:8px;cursor:pointer"><input type="radio" name="fx-why" value="${v}" ${on ? 'checked' : ''} style="margin-top:4px"><span>${html}</span></label>`;
+    const maxIn = id => hasV && x.rc.startsWith('big:') ? `<div style="margin-top:6px;font-size:13px">واعتبر لحد <input id="${id}" type="number" value="${Math.ceil(x.val)}" style="width:110px;display:inline-block"> ${esc(x.unit || '')} طبيعي، ونبّهني لو عدّى كده</div>` : '';
+    modal(`<h3>🧠 ليه ده صح؟</h3><p class="mut">قولّي السبب علشان البرنامج يتعلّم ومايطلّعش حاجة زي دي تاني.</p>
+      <div class="infobox" style="margin-bottom:12px"><b>${esc(x.what)}</b><br>${esc(x.why)}</div>
+      ${opt('once', '<b>صح المرة دي بس</b><div class="mut" style="font-size:12.5px">يختفي السطر ده بس، ولو حصلت حاجة زيه تاني يطلع عادي.</div>', true)}
+      ${x.ent ? opt('ent', `<b>ده طبيعي ${esc(li(x.entL))}</b><div class="mut" style="font-size:12.5px">تنبيه «${esc(rn)}» مش هيطلع تاني ${esc(li(x.entL))}.</div>${maxIn('fx-max-ent')}`) : ''}
+      ${x.ent ? opt('all', `<b>ده طبيعي ${esc(li(x.entsL))}</b><div class="mut" style="font-size:12.5px">تنبيه «${esc(rn)}» مش هيطلع تاني لأي حد.</div>${maxIn('fx-max-all')}`) : ''}
+      ${opt('off', `<b>مش عايز تنبيه «${esc(rn)}» خالص</b><div class="mut" style="font-size:12.5px">البرنامج هيبطّل يدوّر على الحاجة دي في كل الأقسام.</div>`)}
+      <div class="f" style="margin-top:6px"><label>اكتب السبب بكلامك (بيتحفظ عشان ترجعله وتعرف ليه)</label><textarea id="fx-note" rows="2" placeholder="مثلًا: العربية دي بتشتغل على خط طويل"></textarea></div>
+      <div id="fx-msg"></div>
+      <div style="display:flex;gap:10px;margin-top:12px"><button class="btn" data-act="fx-learn" data-i="${i}">حفظ</button><button class="btn ghost" data-act="close">إلغاء</button></div>`, 640);
+  },
+  learn(i) {
+    const x = this.all()[i]; if (!x) return closeModal();
+    const how = ($('input[name="fx-why"]:checked') || {}).value || 'once', note = ($('#fx-note') || {}).value.trim(), S = this.store();
+    if (how !== 'once' && !note) { $('#fx-msg').innerHTML = '<div class="err">اكتب السبب بكلامك (سطر واحد يكفي) علشان تبقى عارف البرنامج اتعلّم إيه وليه.</div>'; $('#fx-note').focus(); return; }
+    if (how === 'once') { S.d = [...new Set([...S.d, x.fp])]; if (note) S.n[x.fp] = note; return this.save(S, '✓ اتجاهل المرة دي'); }
+    const mx = how === 'ent' ? $('#fx-max-ent') : how === 'all' ? $('#fx-max-all') : null, max = mx && mx.value !== '' ? +mx.value : null;
+    const r = { rc: x.rc, ent: how === 'ent' ? x.ent : '*', entL: how === 'ent' ? x.entL : how === 'all' ? x.entsL : 'كل الأقسام', why: note, by: Data.me.username, at: nowKw().slice(0, 16), sec: x.sec };
+    if (max !== null && x.rc.startsWith('big:')) { r.max = max; r.unit = x.unit || ''; }
+    S.r = [...S.r.filter(o => !(o.rc === r.rc && o.ent === r.ent)), r];
+    const hid = this.all().filter(y => this.learned(y, [r])).length;
+    return this.save(S, `🧠 البرنامج اتعلّم: ${hid} تنبيه زي ده اختفى`);
+  },
+  learnedView(S, all) {
+    const rows = S.r.map((r, i) => [esc(RULE_NAMES[r.rc] || r.rc), esc(r.entL || ''), r.max !== undefined && r.max !== null ? `طبيعي لحد ${fmt(r.max)} ${esc(r.unit || '')}` : 'دايمًا طبيعي', `<span style="white-space:normal">${esc(r.why || '')}</span>`, esc(r.by || ''), esc(r.at || ''),
+      fmt(all.filter(x => this.learned(x, [r])).length), this.canDismiss() ? `<button class="btn ghost sm" data-act="fx-unlearn" data-i="${i}">انسَ دي</button>` : '']);
+    return `<div class="card hero" style="margin-bottom:14px"><h2>🧠 اللي اتعلّمه البرنامج منك</h2><p>كل مرة تقول «صح، تجاهل» وتختار إن الحاجة طبيعية، البرنامج بيحفظ القاعدة دي هنا. لو غيّرت رأيك دوس «انسَ دي» والتنبيهات ترجع.</p></div>
+      <div class="filters">${this.viewSel('2', S)}</div>
+      <div class="card">${rows.length ? table(['التنبيه', 'على مين', 'الشرط', 'السبب', 'مين', 'إمتى', 'بيخفي', ''], rows, { num: [6], max: 900 }) : '<div class="empty">لسه البرنامج متعلّمش حاجة. أول ما تقول «صح، تجاهل» وتختار السبب، هيظهر هنا.</div>'}</div>`;
+  },
+  viewSel(v, S) { return sel('fx.list.hidden', v, [['1', 'اللي اتجاهلت'], ['2', `🧠 اللي اتعلّمه البرنامج (${S.r.length})`], ['3', '👤 أخطاء كل موظف']], { label: 'عرض', all: 'المفتوحة' }); },
+  // اسم الموظف من اسم الدخول
+  uname(u) {
+    if (!u) return '—';
+    if (!Admin._loaded && !this._ul) { this._ul = true; Admin.loadUsersSafe().then(() => App.page === 'fixes' && App.render()).catch(() => {}); }
+    const x = (Admin.users || []).find(y => y.username === u); return x && x.full_name ? x.full_name : u;
+  },
+  // ---------------- المدقق: أخطاء كل موظف ----------------
+  empView(S, all) {
+    const st = this.st.list, d = new Set(S.d), [f, t] = st.per === 'all' ? ['0000', '9999'] : presetRange({ preset: st.per });
+    const inP = dt => { if (!dt) return st.per === 'all'; const x = dt.length === 7 ? dt + '-15' : dt; return x >= f && x <= t; };
+    const iss = all.filter(x => !d.has(x.fp) && !this.learned(x, S.r) && x.by && inP(x.date));
+    // كام سند سجّل كل موظف في نفس الفترة
+    const ent = new Map(), add = (u, dt) => { if (u && inP(dt)) ent.set(u, (ent.get(u) || 0) + 1); };
+    const can = k => Data.level(k) >= 1;
+    if (can('deliveries')) T.deliveries.rows.forEach(r => add(r.created_by, r.date));
+    if (can('cars')) T.expenses.rows.forEach(r => add(r.created_by, r.date));
+    if (can('diesel')) { T.refuels.rows.forEach(r => add(r.created_by, r.date)); T.odometer.rows.forEach(r => add(r.updated_by, r.month)); }
+    if (can('goods')) T.grec.rows.forEach(r => add(r.created_by, r.date));
+    if (can('materials')) { T.batches.rows.forEach(r => add(r.created_by, r.arrival_date)); T.issues.rows.forEach(r => add(r.created_by, r.date)); }
+    if (can('performance')) T.perf.rows.forEach(r => add(r.created_by, r.date));
+    if (can('employees')) T.emprec.rows.forEach(r => add(r.created_by, r.date));
+    const users = [...new Set([...ent.keys(), ...iss.map(x => x.by)])];
+    const rows = users.map(u => { const mine = iss.filter(x => x.by === u), e = mine.filter(x => !x.warn), n = ent.get(u) || 0, types = new Map();
+      for (const x of e) types.set(RULE_NAMES[x.rc] || x.why, (types.get(RULE_NAMES[x.rc] || x.why) || 0) + 1);
+      const top = [...types.entries()].sort((a, b) => b[1] - a[1])[0];
+      return { u, name: this.uname(u), n, err: e.length, note: mine.length - e.length, rate: n ? e.length / n * 100 : 0, top: top ? `${top[0]} (${fmt(top[1])})` : '—', secs: [...new Set(e.map(x => FIX_SECS[x.sec]))].join('، ') }; })
+      .sort((a, b) => b.err - a.err || b.rate - a.rate);
+    const worst = rows.filter(r => r.err)[0];
+    const PER = [['all', 'كل الوقت'], ['month', 'هذا الشهر'], ['prev', 'الشهر السابق'], ['six', 'آخر 6 أشهر'], ['year', 'هذه السنة'], ['lastyear', 'السنة السابقة']];
+    return `<div class="card hero" style="margin-bottom:14px"><h2>👤 أخطاء كل موظف</h2>
+        <p>البرنامج بيراجع كل سند وبيعرف مين سجّله، فبيجمع أخطاء كل موظف ونسبتها من شغله. ${worst ? `أكتر واحد عنده أخطاء: <b>${esc(worst.name)}</b> (${fmt(worst.err)} غلط من ${fmt(worst.n)} سند).` : 'مفيش أخطاء مفتوحة في الفترة دي ✓'}</p>
+        <p class="mut" style="font-size:13px">بيتحسب الغلط الأكيد اللي لسه متصلّحش. اللي إنت قلت عليه «صح» مش بيتحسب على الموظف.</p></div>
+      <div class="filters">${this.viewSel('3', S)}${sel('fx.list.per', st.per, PER, { label: 'الفترة' })}</div>
+      <div class="grid g2" style="margin-bottom:14px">${card('نسبة الغلط من شغل كل موظف', '% من السندات اللي سجّلها', hbars(rows.filter(r => r.n).map(r => [r.name, +r.rate.toFixed(1), r.rate >= 5 ? 'var(--bad, #DD6A49)' : r.rate >= 1 ? '#E8B04B' : '#22A285']), { unit: '%', dec: 1 }))}
+        ${card('عدد الأخطاء', 'الغلط الأكيد لكل موظف', hbars(rows.filter(r => r.err).map(r => [r.name, r.err, '#DD6A49'])))}</div>
+      <div class="card">${rows.length ? table(['الموظف', 'السندات اللي سجّلها', 'غلط أكيد', 'ملاحظات', 'نسبة الغلط', 'أكتر غلطة بيعملها', 'في أقسام', ''],
+        rows.map(r => [`<b>${esc(r.name)}</b>${r.name !== r.u ? `<div class="mut" style="font-size:12px">${esc(r.u)}</div>` : ''}`, fmt(r.n), r.err ? `<b class="st-bad">${fmt(r.err)}</b>` : '0', fmt(r.note), `${fmt(r.rate, 1)}%`, `<span style="white-space:normal">${esc(r.top)}</span>`, `<span style="white-space:normal">${esc(r.secs)}</span>`,
+          r.err + r.note ? `<button class="btn sm" data-act="fx-by" data-u="${esc(r.u)}">اعرض أخطاءه ←</button>` : '']), { num: [1, 2, 3, 4], max: 900 }) : '<div class="empty">مفيش بيانات في الفترة دي</div>'}</div>`;
+  },
+  async unlearn(i) { const S = this.store(); S.r = S.r.filter((_, k) => k !== i); return this.save(S, '✓ البرنامج نسي القاعدة دي، والتنبيهات رجعت'); },
   // من أي قسم: افتح التصحيحات على عربيات معيّنة
   showFor(sec, vids) { this.st.list = { ...this.st.list, sec, vids: vids.join(','), kind: '', q: '', hidden: '' }; return App.open('fixes'); },
   act: {
     'go': (t) => Fixes.go(+t.dataset.i),
-    'skip': (t) => Fixes.setDismissed(t.dataset.fp, true), 'undo': (t) => Fixes.setDismissed(t.dataset.fp, false),
+    'skip': (t) => Fixes.askWhy(+t.dataset.i), 'learn': (t) => Fixes.learn(+t.dataset.i), 'unlearn': (t) => Fixes.unlearn(+t.dataset.i), 'undo': (t) => Fixes.setDismissed(t.dataset.fp, false),
     'more': () => { Fixes.st.list.more++; App.render(); },
     'sec': (t) => { Fixes.st.list.sec = t.dataset.sec; App.render(); },
     'clear': () => { Fixes.st.list.vids = ''; App.render(); },
+    'clearby': () => { Fixes.st.list.by = ''; App.render(); },
+    'by': (t) => { Object.assign(Fixes.st.list, { by: t.dataset.u, hidden: '', sec: '', kind: '', q: '', vids: '' }); App.render(); },
   },
 };
 // ============================================================================
