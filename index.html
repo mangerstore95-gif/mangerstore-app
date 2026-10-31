@@ -215,7 +215,7 @@ const DEFAULT_URL = 'https://masodssfbppadcfqkfcp.supabase.co';
 const DEFAULT_KEY = 'sb_publishable_nAjjVRgAlfwzg3MYDn7OGQ_RH5efYKP';   // المفتاح العام (publishable) — آمن للنشر
 const DOMAIN = 'qattami.app';                 // اسم الدخول amir ⇐ amir@qattami.app (أو إيميل حقيقي مربوط بالمستخدم)
 const OLD_APP = 'https://mangerstore-system.streamlit.app';
-const VERSION = 'web-4.1';
+const VERSION = 'web-4.2';
 const PAGE = 1000;                            // أقصى عدد صفوف يرجعه Supabase في الطلب الواحد
 const LS = {
   get(k, d = null) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
@@ -1985,13 +1985,8 @@ const STATUS = {
   normal: ['طبيعي', 'st-good', '#22A285'], acceptable: ['مقبول', 'st-warn', '#E8B04B'],
   abnormal: ['غير طبيعي', 'st-bad', '#DD6A49'], missing: ['قراءات ناقصة', 'st-miss', '#5C7480'], open: ['الشهر لسه جاري', 'st-miss', '#8A9AA3'],
 };
-// الحالة؛ ولو فيها مشكلة في القراءات تبقى زرار يفتح تفاصيل المشكلة ومكانها
-const pill = (code, vid) => {
-  if (code === 'missing' && vid && Data.level('fixes') >= 1) return `<button class="pill ${STATUS[code][1]}" data-act="ds-issues" data-vids="${vid}" title="اضغط لمعرفة المشكلة ومكانها" style="cursor:pointer;font:inherit">${STATUS[code][0]} ←</button>`;
-  const base = `<span class="pill ${STATUS[code][1]}">${STATUS[code][0]}</span>`;
-  // المعدل محسوب من الشهور السليمة، بس فيه شهور قراءاتها غلط: نبيّنها
-  return vid && Data.level('fixes') >= 1 && Diesel.issues(vid).some(x => !x.warn) ? base + ` <button class="pill st-miss" data-act="ds-issues" data-vids="${vid}" title="فيه شهور قراءاتها غلط؛ اضغط لمعرفتها" style="cursor:pointer;font:inherit">⚠️ قراءات غلط ←</button>` : base;
-};
+// الحالة بس؛ أي مراجعة أو تصحيح للبيانات مكانه قسم «التصحيحات» (للمدير) ومش بيظهر للموظف هنا
+const pill = code => `<span class="pill ${STATUS[code][1]}">${STATUS[code][0]}</span>`;
 const Diesel = {
   key: 'diesel', title: 'تعبئة الديزل', icon: '⛽', tables: ['refuels', 'odometer', 'settings'],
   st: {
@@ -2082,7 +2077,7 @@ const Diesel = {
         ${kpi('لترات الفترة', fmt(lit), vsLY(lit, prevL ? prevL : null, { higherGood: false }))}
         ${kpi('متوسط الأسطول', fleet ? fmt(fleet, 1) + ' <small>كم/لتر</small>' : '—', fleet && lyFleet ? vsLY(fleet, lyFleet, { dec: 1 }) : `<span class="mut">المعدل الطبيعي ${fmt(fleetNat, 1)}</span>`)}
         ${kpi('استهلاك غير طبيعي', fmt(abn.length), `<span class="${abn.length ? 'down' : 'up'}">${esc(abn.slice(0, 3).map(x => x.v).join('، ')) || 'لا يوجد'}</span>`, abn.length ? 'st-bad' : '')}
-        ${kpi('قراءات ناقصة', fmt(miss.length), miss.length && Data.level('fixes') >= 1 ? `<button class="btn ghost sm" data-act="ds-issues" data-vids="${miss.map(x => x.vid).join(',')}">اعرض فين المشكلة ←</button>` : '<span class="mut">كل القراءات سليمة</span>')}
+        ${kpi('قراءات ناقصة', fmt(miss.length), '<span class="mut">سجّلها ليُحسب المعدل</span>')}
       </div>
       ${card('المعدل الفعلي مقابل الطبيعي', 'كم لكل لتر؛ العلامة البيضاء هي المعدل الطبيعي للمركبة، واللون حسب الحالة',
         hbars(ss.map(x => [`${x.v} · ${x.vt}`, x.eff, STATUS[x.code][2], x.nat]), { dec: 1, unit: 'كم/لتر' }), 's7')}
@@ -2097,7 +2092,7 @@ const Diesel = {
   sumTable(s) {
     return table(['السيارة', 'النوع', 'اللترات', 'بداية العداد', 'نهاية العداد', 'المسافة (كم)', 'المعدل الفعلي', 'المعدل الطبيعي', 'الحالة'],
       s.map(x => [esc(x.v), esc(x.vt), fmt(x.l), x.start === null ? '—' : fmt(x.start), x.end === null ? '—' : fmt(x.end),
-        x.km ? fmt(x.km) + (x.roll ? ' <small class="mut">(العداد لفّ)</small>' : '') : '—', x.eff ? fmt(x.eff, 2) : '—', fmt(x.nat, 1), pill(x.code, x.vid)]), { num: [2, 3, 4, 5, 6, 7] });
+        x.km ? fmt(x.km) + (x.roll ? ' <small class="mut">(العداد لفّ)</small>' : '') : '—', x.eff ? fmt(x.eff, 2) : '—', fmt(x.nat, 1), pill(x.code)]), { num: [2, 3, 4, 5, 6, 7] });
   },
 
   // ---------------- السند الشهري ----------------
@@ -2289,7 +2284,7 @@ const Diesel = {
         : '<div class="empty">لا توجد تعبئات مطابقة</div>'}</div>
       ${card('تقرير كل مركبة (جميع الشهور)', 'المعدل الفعلي محسوب على الشهور التي لها قراءات عداد كاملة',
         table(['السيارة', 'النوع', 'إجمالي اللترات', 'عدد الشهور', 'المعدل الفعلي', 'المعدل الطبيعي', 'الحالة'],
-          perRows.map(x => [esc(x.v), esc(x.vt), fmt(x.l), x.ms.size, x.eff ? fmt(x.eff, 2) : '—', fmt(x.nat, 1), pill(x.code, x.vid)]), { num: [2, 3, 4, 5] }))}`;
+          perRows.map(x => [esc(x.v), esc(x.vt), fmt(x.l), x.ms.size, x.eff ? fmt(x.eff, 2) : '—', fmt(x.nat, 1), pill(x.code)]), { num: [2, 3, 4, 5] }))}`;
   },
 
   // ---------------- الإعدادات ----------------
