@@ -215,7 +215,7 @@ const DEFAULT_URL = 'https://masodssfbppadcfqkfcp.supabase.co';
 const DEFAULT_KEY = 'sb_publishable_nAjjVRgAlfwzg3MYDn7OGQ_RH5efYKP';   // المفتاح العام (publishable) — آمن للنشر
 const DOMAIN = 'qattami.app';                 // اسم الدخول amir ⇐ amir@qattami.app (أو إيميل حقيقي مربوط بالمستخدم)
 const OLD_APP = 'https://mangerstore-system.streamlit.app';
-const VERSION = 'web-3.7';
+const VERSION = 'web-3.8';
 const PAGE = 1000;                            // أقصى عدد صفوف يرجعه Supabase في الطلب الواحد
 const LS = {
   get(k, d = null) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
@@ -1982,7 +1982,7 @@ const Deliveries = {
 // ============================================================================
 const STATUS = {
   normal: ['طبيعي', 'st-good', '#22A285'], acceptable: ['مقبول', 'st-warn', '#E8B04B'],
-  abnormal: ['غير طبيعي', 'st-bad', '#DD6A49'], missing: ['قراءات ناقصة', 'st-miss', '#5C7480'],
+  abnormal: ['غير طبيعي', 'st-bad', '#DD6A49'], missing: ['قراءات ناقصة', 'st-miss', '#5C7480'], open: ['الشهر لسه جاري', 'st-miss', '#8A9AA3'],
 };
 // الحالة؛ ولو فيها مشكلة في القراءات تبقى زرار يفتح تفاصيل المشكلة ومكانها
 const pill = (code, vid) => {
@@ -2025,7 +2025,7 @@ const Diesel = {
     return [...g.values()].map(x => {
       const o = this.odo(month, x.vid) || {}, dd = this.distance(o.start_km, o.end_km), nat = this.natural(x.vid);
       const eff = dd.km && x.l > 0 ? Math.round(dd.km / x.l * 100) / 100 : null;
-      return { ...x, start: o.start_km ?? null, end: o.end_km ?? null, km: dd.km, roll: dd.roll, eff, nat, code: this.status(eff, nat) };
+      return { ...x, start: o.start_km ?? null, end: o.end_km ?? null, km: dd.km, roll: dd.roll, eff, nat, code: !eff && month === thisMonth() ? 'open' : this.status(eff, nat) };
     }).sort((a, b) => b.l - a.l);
   },
   monthsWithData() { return [...new Set(this.rows().map(r => r.ym))].sort().reverse(); },
@@ -2043,10 +2043,10 @@ const Diesel = {
     const by = new Map();
     for (const m of [...new Set(rows.map(r => r.ym))].sort()) for (const x of this.summary(rows.filter(r => r.ym === m), m)) {
       const o = by.get(x.vid) || { vid: x.vid, v: x.v, vt: x.vt, l: 0, n: 0, km: 0, lm: 0, nat: x.nat, roll: false, start: null, end: null, months: 0 };
-      o.l += x.l; o.n += x.n; o.months++; if (x.km) { o.km += x.km; o.lm += x.l; } if (x.roll) o.roll = true; o.start = x.start; o.end = x.end; by.set(x.vid, o);
+      o.l += x.l; o.n += x.n; o.months++; o.old = o.old || m !== thisMonth(); if (x.km) { o.km += x.km; o.lm += x.l; } if (x.roll) o.roll = true; o.start = x.start; o.end = x.end; by.set(x.vid, o);
     }
     return [...by.values()].map(o => { const eff = o.lm ? Math.round(o.km / o.lm * 100) / 100 : null;
-      return { ...o, km: o.km || null, start: o.months === 1 ? o.start : null, end: o.months === 1 ? o.end : null, eff, code: this.status(eff, o.nat) }; }).sort((a, b) => b.l - a.l);
+      return { ...o, km: o.km || null, start: o.months === 1 ? o.start : null, end: o.months === 1 ? o.end : null, eff, code: !eff && !o.old ? 'open' : this.status(eff, o.nat) }; }).sort((a, b) => b.l - a.l);
   },
   fleetOf(s) { const m = s.filter(x => x.km), km = m.reduce((a, x) => a + x.km, 0), l = m.reduce((a, x) => a + x.lm, 0);
     return [l ? km / l : null, l ? m.reduce((a, x) => a + x.nat * x.lm, 0) / l : this.general(), km]; },
@@ -2159,7 +2159,8 @@ const Diesel = {
   issues(vid) {
     const has = v => v !== null && v !== undefined && v !== '', out = [];
     for (const m of [...new Set(this.rows().filter(r => r.vid === vid).map(r => r.ym))].sort().reverse()) {
-      const o = this.odo(m, vid) || {}, s = o.start_km, e = o.end_km, p = this.odo(prevMonth(m), vid), pe = p && has(p.end_km) ? +p.end_km : null, cur = m === thisMonth();
+      if (m === thisMonth()) continue;   // الشهر الجاري لسه مخلصش: نهايته بتتسجّل في آخره، فمش بنعدّها مشكلة
+      const o = this.odo(m, vid) || {}, s = o.start_km, e = o.end_km, p = this.odo(prevMonth(m), vid), pe = p && has(p.end_km) ? +p.end_km : null, cur = false;
       let why = null, warn = false;
       if (!has(s) && !has(e)) { why = 'قراءات العداد مش متسجّلة للشهر ده'; warn = cur; }
       else if (!has(s)) why = 'قراءة بداية الشهر مش متسجّلة';
@@ -2262,7 +2263,7 @@ const Diesel = {
     const perRows = [...per.entries()].map(([vid, x]) => {
       let km = 0, lm = 0;
       for (const m of x.ms) { const o = this.odo(m, vid); const dd = o ? this.distance(o.start_km, o.end_km) : { km: null }; if (dd.km) { km += dd.km; lm += all.filter(r => r.vid === vid && r.ym === m).reduce((a, r) => a + r.l, 0); } }
-      const eff = lm ? km / lm : null, nat = this.natural(vid); return { ...x, vid, eff, nat, code: this.status(eff, nat) };
+      const eff = lm ? km / lm : null, nat = this.natural(vid); return { ...x, vid, eff, nat, code: !eff && [...x.ms].every(m => m === thisMonth()) ? 'open' : this.status(eff, nat) };
     }).sort((a, b) => b.l - a.l);
     this._rep = { f, t, d };
     return `<div class="card" style="margin-bottom:14px"><h3>استعلام: لترات سائق أو سيارة خلال فترة</h3>
