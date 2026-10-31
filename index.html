@@ -215,7 +215,7 @@ const DEFAULT_URL = 'https://masodssfbppadcfqkfcp.supabase.co';
 const DEFAULT_KEY = 'sb_publishable_nAjjVRgAlfwzg3MYDn7OGQ_RH5efYKP';   // المفتاح العام (publishable) — آمن للنشر
 const DOMAIN = 'qattami.app';                 // اسم الدخول amir ⇐ amir@qattami.app (أو إيميل حقيقي مربوط بالمستخدم)
 const OLD_APP = 'https://mangerstore-system.streamlit.app';
-const VERSION = 'web-4.4';
+const VERSION = 'web-4.5';
 const PAGE = 1000;                            // أقصى عدد صفوف يرجعه Supabase في الطلب الواحد
 const LS = {
   get(k, d = null) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
@@ -1986,6 +1986,9 @@ const STATUS = {
   abnormal: ['غير طبيعي', 'st-bad', '#DD6A49'], missing: ['قراءات ناقصة', 'st-miss', '#5C7480'], open: ['الشهر لسه جاري', 'st-miss', '#8A9AA3'],
 };
 // الحالة بس؛ أي مراجعة أو تصحيح للبيانات مكانه قسم «التصحيحات» (للمدير) ومش بيظهر للموظف هنا
+// أكبر رقم عداد معقول (بعض العربيات عدادها عدّى المليون)، وأكبر فرق معقول بين نهاية شهر وبداية اللي بعده
+const ODO_MAX = 9999999, ODO_JUMP = 100000;
+const jump = (pe, s) => pe !== null && pe > 0 && !(pe >= 900000 && pe < 1000000 && s < 100000) && Math.abs(s - pe) > ODO_JUMP;
 const pill = code => `<span class="pill ${STATUS[code][1]}">${STATUS[code][0]}</span>`;
 const Diesel = {
   key: 'diesel', title: 'تعبئة الديزل', icon: '⛽', tables: ['refuels', 'odometer', 'settings'],
@@ -2130,8 +2133,8 @@ const Diesel = {
       const s = o && o.start_km !== null ? o.start_km : (p && p.end_km !== null ? p.end_km : ''), e = o && o.end_km !== null ? o.end_km : '';
       const lit = d.filter(x => x.vid === r.vid).reduce((a, x) => a + x.l, 0);
       return [esc(r.v) + ' — ' + esc(r.vt), fmt(lit),
-        can ? `<input type="number" min="0" step="1" data-odo="${r.vid}" data-f="s" value="${s ?? ''}">` : (s === '' ? '—' : fmt(s)),
-        can ? `<input type="number" min="0" step="1" data-odo="${r.vid}" data-f="e" value="${e ?? ''}">` : (e === '' ? '—' : fmt(e))];
+        can ? `<input type="number" min="0" step="1" data-odo="${r.vid}" data-f="s" data-o="${s ?? ''}" value="${s ?? ''}">` : (s === '' ? '—' : fmt(s)),
+        can ? `<input type="number" min="0" step="1" data-odo="${r.vid}" data-f="e" data-o="${e ?? ''}" value="${e ?? ''}">` : (e === '' ? '—' : fmt(e))];
     });
     return table(['السيارة', 'اللترات', 'بداية الشهر (كم)', 'نهاية الشهر (كم)'], rows, { num: [1], max: 600 }) +
       (can ? `<div style="margin-top:12px"><button class="btn" data-act="ds-save-odo">حفظ القراءات</button></div>` : '');
@@ -2161,7 +2164,8 @@ const Diesel = {
       if (!has(s) && !has(e)) { why = 'قراءات العداد مش متسجّلة للشهر ده'; warn = cur; }
       else if (!has(s)) why = 'قراءة بداية الشهر مش متسجّلة';
       else if (!has(e)) { why = cur ? 'الشهر لسه مخلصش: سجّل قراءة النهاية في آخر الشهر' : 'قراءة نهاية الشهر مش متسجّلة'; warn = cur; }
-      else if (+s > 999999 || +e > 999999) why = 'رقم فيه أكتر من 6 أرقام (غالبًا اتكتب غلط)';
+      else if (+s > ODO_MAX || +e > ODO_MAX) why = 'رقم كبير جدًا (غالبًا اتكتب غلط)';
+      else if (jump(pe, +s)) why = `بداية الشهر بعيدة جدًا عن نهاية الشهر اللي قبله (${fmt(pe)})؛ غالبًا اتكتبت غلط`;
       else if (+s === 0 && +e === 0) why = 'القراءات متسجّلة صفر، يعني مش متسجّلة فعلًا';
       else if (+s === +e) why = 'البداية والنهاية نفس الرقم';
       else if (this.distance(s, e).km === null) why = 'قراءة النهاية أصغر من البداية';
@@ -2169,9 +2173,9 @@ const Diesel = {
         why = pe === 0 ? `نهاية الشهر اللي قبله متسجّلة صفر؛ صحّح الشهر اللي قبله` : `بداية الشهر ده (${fmt(+s)}) المفروض تكون قريبة من نهاية الشهر اللي قبله (${fmt(pe)})؛ واحدة منهم غالبًا غلط`; }
       if (why) {
         // الرقم المقترح: البداية = نهاية الشهر اللي قبله، والنهاية = بداية الشهر اللي بعده (لو موجودين ومنطقيين)
-        const nx = this.odo(nextMonth(m), vid), ns = nx && has(nx.start_km) && +nx.start_km > 0 && +nx.start_km <= 999999 ? +nx.start_km : null;
-        const okPe = pe !== null && pe > 0 && pe <= 999999 ? pe : null;
-        const sBad = !has(s) || +s === 0 || +s > 999999, eBad = !has(e) || +e === 0 || +e > 999999;
+        const nx = this.odo(nextMonth(m), vid), ns = nx && has(nx.start_km) && +nx.start_km > 0 && +nx.start_km <= ODO_MAX ? +nx.start_km : null;
+        const okPe = pe !== null && pe > 0 && pe <= ODO_MAX ? pe : null;
+        const sBad = !has(s) || +s === 0 || +s > ODO_MAX || jump(pe, +s), eBad = !has(e) || +e === 0 || +e > ODO_MAX;
         let fs = null, fe = null;
         if (sBad && okPe !== null) fs = okPe;
         if (eBad && ns !== null && ns > (fs ?? (sBad ? 0 : +s))) fe = ns;
@@ -2199,19 +2203,23 @@ const Diesel = {
     setTimeout(() => { tr.style.outline = ''; }, 6000);
   },
   async saveOdo(btn) {
-    const month = this.st.mon.month, box = $('#ds-odo-msg'), vals = new Map();
-    for (const el of $$('[data-odo]')) { const vid = +el.dataset.odo, x = vals.get(vid) || {}; x[el.dataset.f] = el.value === '' ? null : +el.value; vals.set(vid, x); }
-    const bad = [...vals.entries()].filter(([, x]) => x.s !== null && x.e !== null && x.e < x.s && !this.distance(x.s, x.e).roll).map(([vid]) => (Data.veh.get(vid) || {}).number);
-    const big = [...vals.entries()].filter(([, x]) => (x.s !== null && x.s > 999999) || (x.e !== null && x.e > 999999)).map(([vid]) => (Data.veh.get(vid) || {}).number);
-    if (big.length) { box.innerHTML = `<div class="err">رقم فيه أكتر من 6 أرقام (غالبًا اتكتب غلط) في: ${esc(big.join('، '))}</div>`; return; }
-    if (bad.length) { box.innerHTML = `<div class="err">قراءة النهاية أقل من البداية في: ${esc(bad.join('، '))}</div>`; return; }
+    const month = this.st.mon.month, box = $('#ds-odo-msg'), vals = new Map(), changed = new Set();
+    for (const el of $$('[data-odo]')) { const vid = +el.dataset.odo, x = vals.get(vid) || {}; x[el.dataset.f] = el.value === '' ? null : +el.value; vals.set(vid, x); if (el.value !== (el.dataset.o ?? '')) changed.add(vid); }
+    // بنحفظ ونراجع العربيات اللي اتغيّرت بس (غلط قديم في عربية تانية مايمنعش الحفظ)
+    const ch = [...vals.entries()].filter(([vid]) => changed.has(vid)), name = vid => (Data.veh.get(vid) || {}).number;
+    const fail = msg => { box.innerHTML = `<div class="err">${msg}</div>`; box.scrollIntoView({ block: 'center' }); toast(msg.replace(/<[^>]+>/g, ''), true); };
+    if (!ch.length) return toast('مفيش قراءات اتغيّرت');
+    const big = ch.filter(([, x]) => (x.s !== null && x.s > ODO_MAX) || (x.e !== null && x.e > ODO_MAX)).map(([vid]) => name(vid));
+    if (big.length) return fail(`رقم كبير جدًا (غالبًا اتكتب غلط) في: ${esc(big.join('، '))}`);
+    const bad = ch.filter(([, x]) => x.s !== null && x.e !== null && x.e < x.s && !this.distance(x.s, x.e).roll).map(([vid]) => name(vid));
+    if (bad.length) return fail(`قراءة النهاية أقل من البداية في: ${esc(bad.join('، '))}`);
     btn.disabled = true;
     try {
-      const rows = [...vals.entries()].map(([vid, x]) => ({ month, vehicle_id: vid, start_km: x.s, end_km: x.e, updated_by: Data.me.username, updated_at: nowKw() }));
+      const rows = ch.map(([vid, x]) => ({ month, vehicle_id: vid, start_km: x.s, end_km: x.e, updated_by: Data.me.username, updated_at: nowKw() }));
       await API.upsert('diesel_odometer', rows, 'month,vehicle_id');
-      await T.odometer.sync(); log('diesel', 'حفظ قراءات العداد', month);
-      toast(`✓ تم حفظ قراءات ${rows.length} سيارة`); App.render();
-    } catch (er) { box.innerHTML = `<div class="err">${esc(arErr(er))}</div>`; btn.disabled = false; }
+      await T.odometer.sync(); log('diesel', 'حفظ قراءات العداد', `${month}: ${rows.map(r => name(r.vehicle_id)).join('، ')}`);
+      toast(`✓ تم حفظ قراءات ${rows.length === 1 ? 'سيارة واحدة' : rows.length + ' سيارة'}: ${rows.map(r => name(r.vehicle_id)).join('، ')}`); App.render();
+    } catch (er) { fail(esc(arErr(er))); btn.disabled = false; }
   },
   // تعديل تعبئة (السيارة / السائق / اللترات / التاريخ)
   openEdit(id, msg = '') {
