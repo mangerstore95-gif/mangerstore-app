@@ -215,7 +215,7 @@ const DEFAULT_URL = 'https://masodssfbppadcfqkfcp.supabase.co';
 const DEFAULT_KEY = 'sb_publishable_nAjjVRgAlfwzg3MYDn7OGQ_RH5efYKP';   // المفتاح العام (publishable) — آمن للنشر
 const DOMAIN = 'qattami.app';                 // اسم الدخول amir ⇐ amir@qattami.app (أو إيميل حقيقي مربوط بالمستخدم)
 const OLD_APP = 'https://mangerstore-system.streamlit.app';
-const VERSION = 'web-4.3';
+const VERSION = 'web-4.4';
 const PAGE = 1000;                            // أقصى عدد صفوف يرجعه Supabase في الطلب الواحد
 const LS = {
   get(k, d = null) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
@@ -2112,7 +2112,7 @@ const Diesel = {
         <div class="f"><label>&nbsp;</label><button class="btn" data-act="ds-add">إضافة التعبئة</button></div></div></div>`;
     const tot = d.reduce((s, r) => s + r.l, 0);
     const list = d.length ? table(['التاريخ', 'السيارة', 'النوع', 'السائق', 'اللترات', 'سجّلها', ...(lv >= 3 ? [''] : [])],
-      d.map(r => [r.date, esc(r.v), esc(r.vt), esc(r.d), `<b>${fmt(r.l)}</b>`, esc(r.by), ...(lv >= 3 ? [`<button class="btn ghost sm" data-act="ds-del" data-id="${r.id}">حذف</button>`] : [])]), { num: [4], max: 420 })
+      d.map(r => [r.date, esc(r.v), esc(r.vt), esc(r.d), `<b>${fmt(r.l)}</b>`, esc(r.by), ...(lv >= 3 ? [`<button class="btn ghost sm" data-act="ds-edit" data-id="${r.id}">تعديل</button> <button class="btn ghost sm" data-act="ds-del" data-id="${r.id}">حذف</button>`] : [])]), { num: [4], max: 420 })
       : '<div class="empty">لا توجد تعبئات لهذا الشهر</div>';
     return `<div class="filters">${sel('ds.mon.month', month, months.map(m => [m, monthLabel(m)]), { label: 'الشهر' })}</div>${addForm}
       <div class="card" style="margin-bottom:14px"><h3>تعبئات شهر ${monthLabel(month)}</h3><div class="sub">${fmt(d.length)} تعبئة — ${fmt(tot)} لتر</div>${list}</div>
@@ -2211,6 +2211,35 @@ const Diesel = {
       await API.upsert('diesel_odometer', rows, 'month,vehicle_id');
       await T.odometer.sync(); log('diesel', 'حفظ قراءات العداد', month);
       toast(`✓ تم حفظ قراءات ${rows.length} سيارة`); App.render();
+    } catch (er) { box.innerHTML = `<div class="err">${esc(arErr(er))}</div>`; btn.disabled = false; }
+  },
+  // تعديل تعبئة (السيارة / السائق / اللترات / التاريخ)
+  openEdit(id, msg = '') {
+    const x = T.refuels.rows.find(r => r.id === id); if (!x) return;
+    closeModal();
+    modal(`<h3>تعديل تعبئة</h3>${msg ? `<div class="err">${esc(msg)}</div>` : ''}<div id="er-msg"></div>
+      <div class="grid g2">
+        <div class="f"><label>السيارة *</label><select id="er-veh">${Data.vehicles(x.vehicle_id).map(v => opt(v.id, `${v.number} — ${v.type || ''}`, x.vehicle_id)).join('')}</select></div>
+        <div class="f"><label>السائق *</label><select id="er-drv">${Data.drivers(x.driver_id).map(v => opt(v.id, v.name, x.driver_id)).join('')}</select></div>
+        <div class="f"><label>اللترات *</label><input id="er-lit" type="number" min="1" step="1" inputmode="decimal" value="${esc(x.liters)}"></div>
+        <div class="f"><label>التاريخ *</label><input id="er-date" type="date" value="${x.date}" max="${today()}"></div></div>
+      <div style="display:flex;gap:10px;margin-top:14px"><button class="btn" data-act="ds-save-edit" data-id="${id}">حفظ التعديل</button><button class="btn ghost" data-act="close">إلغاء</button></div>`, 620);
+  },
+  async saveEdit(id, btn) {
+    const x = T.refuels.rows.find(r => r.id === id); if (!x) return closeModal();
+    const veh = +$('#er-veh').value, drv = +$('#er-drv').value, lit = parseFloat($('#er-lit').value), date = $('#er-date').value, box = $('#er-msg'), e = [];
+    if (!(lit > 0)) e.push('يجب أن تكون الكمية أكبر من صفر'); else if (lit > 1500) e.push('الكمية كبيرة جدًا، تحقق من الرقم');
+    if (!date || date > today()) e.push('التاريخ غير صحيح');
+    if (e.length) { box.innerHTML = `<div class="err">${e.join('<br>')}</div>`; return; }
+    if (veh === x.vehicle_id && drv === x.driver_id && lit === +x.liters && date === x.date) return closeModal();
+    btn.disabled = true;
+    try {
+      // نسجّل التعبئة بعد التعديل الأول، وبعدين نشيل القديمة (علشان لو حصلت مشكلة في النص متضيعش)
+      const row = await API.insert('diesel_refuels', { date, vehicle_id: veh, driver_id: drv, liters: lit, created_by: Data.me.username, created_at: x.created_at || nowKw() });
+      await API.remove('diesel_refuels', id); T.refuels.drop(id); T.refuels.put(row);
+      const v = Data.veh.get(veh) || {};
+      log('diesel', 'تعديل تعبئة', `${(Data.veh.get(x.vehicle_id) || {}).number} ${fmt(+x.liters)} لتر ${x.date} ← ${v.number} ${fmt(lit)} لتر ${date}`);
+      closeModal(); toast(`✓ اتعدّلت التعبئة: ${fmt(lit)} لتر للسيارة ${v.number}`); App.render();
     } catch (er) { box.innerHTML = `<div class="err">${esc(arErr(er))}</div>`; btn.disabled = false; }
   },
   confirmDel(id) {
@@ -2343,6 +2372,7 @@ const Diesel = {
   },
   act: {
     'add': (t) => Diesel.addRefuel(t), 'save-odo': (t) => Diesel.saveOdo(t),
+    'edit': (t) => Diesel.openEdit(+t.dataset.id), 'save-edit': (t) => Diesel.saveEdit(+t.dataset.id, t),
     'issues': (t) => Fixes.showFor('diesel', t.dataset.vids.split(',').map(Number)),   // كل التصحيحات بقت في قسم «التصحيحات» 'goto': (t) => Diesel.goto(t.dataset.m, +t.dataset.vid, { s: t.dataset.fs, e: t.dataset.fe }),
     'fill': (t) => { const inp = $(`[data-odo="${t.dataset.vid}"][data-f="${t.dataset.f}"]`); if (!inp) return; inp.value = t.dataset.v; inp.style.background = 'color-mix(in srgb,var(--accent) 18%,transparent)'; t.textContent = '✓ اتكتب — دوس «حفظ القراءات»'; t.disabled = true; },
     'del': (t) => Diesel.confirmDel(+t.dataset.id), 'do-del': (t) => Diesel.doDel(+t.dataset.id, t),
@@ -4618,7 +4648,7 @@ const Fixes = {
       for (const r of R) { if (!byV.has(r.vehicle_id)) byV.set(r.vehicle_id, []); byV.get(r.vehicle_id).push(+r.liters || 0); }
       const seen = new Map(), MV = medMap(byV);
       for (const r of R) {
-        const l = +r.liters || 0, what = () => `${vName(r.vehicle_id)} — ${fmt(l)} لتر`, go = { fn: 'dsMonth', args: [r.date.slice(0, 7)] };
+        const l = +r.liters || 0, what = () => `${vName(r.vehicle_id)} — ${fmt(l)} لتر`, go = { fn: 'dsEdit', args: [r.id] };
         if (l <= 0) push({ sec: 'diesel', id: r.id, fp: `zero:ref:${r.id}:${l}`, no: '', date: r.date, what, why: 'تعبئة بصفر لتر', go, lv: 3 });
         const [n, md] = MV.get(r.vehicle_id);
         if (n >= 5 && l > md * 3 && l - md > 100) push({ sec: 'diesel', id: r.id, fp: `big:ref:${r.id}:${l}`, no: '', date: r.date, what, why: `لترات كتير بشكل غريب: المعتاد للعربية دي حوالي ${fmt(md)} لتر`, warn: true, go, lv: 3 });
@@ -4740,6 +4770,7 @@ const Fixes = {
     if (x.go.fn === 'batch') return Materials.openEditBatch(a0);
     if (x.go.fn === 'issue') return Materials.openEditIssue(a0);
     if (x.go.fn === 'odo') return Diesel.goto(a0, a1, a2);
+    if (x.go.fn === 'dsEdit') return Diesel.openEdit(a0);
     if (x.go.fn === 'dsMonth') { Diesel.st.tab = 'mon'; LS.set('qw_ds_tab', 'mon'); Diesel.st.mon.month = a0; return App.open('diesel'); }
   },
   async setDismissed(fp, on) {
