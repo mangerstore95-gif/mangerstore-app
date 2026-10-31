@@ -215,7 +215,7 @@ const DEFAULT_URL = 'https://masodssfbppadcfqkfcp.supabase.co';
 const DEFAULT_KEY = 'sb_publishable_nAjjVRgAlfwzg3MYDn7OGQ_RH5efYKP';   // المفتاح العام (publishable) — آمن للنشر
 const DOMAIN = 'qattami.app';                 // اسم الدخول amir ⇐ amir@qattami.app (أو إيميل حقيقي مربوط بالمستخدم)
 const OLD_APP = 'https://mangerstore-system.streamlit.app';
-const VERSION = 'web-3.5';
+const VERSION = 'web-3.7';
 const PAGE = 1000;                            // أقصى عدد صفوف يرجعه Supabase في الطلب الواحد
 const LS = {
   get(k, d = null) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
@@ -1984,7 +1984,13 @@ const STATUS = {
   normal: ['طبيعي', 'st-good', '#22A285'], acceptable: ['مقبول', 'st-warn', '#E8B04B'],
   abnormal: ['غير طبيعي', 'st-bad', '#DD6A49'], missing: ['قراءات ناقصة', 'st-miss', '#5C7480'],
 };
-const pill = code => `<span class="pill ${STATUS[code][1]}">${STATUS[code][0]}</span>`;
+// الحالة؛ ولو فيها مشكلة في القراءات تبقى زرار يفتح تفاصيل المشكلة ومكانها
+const pill = (code, vid) => {
+  if (code === 'missing' && vid) return `<button class="pill ${STATUS[code][1]}" data-act="ds-issues" data-vids="${vid}" title="اضغط لمعرفة المشكلة ومكانها" style="cursor:pointer;font:inherit">${STATUS[code][0]} ←</button>`;
+  const base = `<span class="pill ${STATUS[code][1]}">${STATUS[code][0]}</span>`;
+  // المعدل محسوب من الشهور السليمة، بس فيه شهور قراءاتها غلط: نبيّنها
+  return vid && Diesel.issues(vid).some(x => !x.warn) ? base + ` <button class="pill st-miss" data-act="ds-issues" data-vids="${vid}" title="فيه شهور قراءاتها غلط؛ اضغط لمعرفتها" style="cursor:pointer;font:inherit">⚠️ قراءات غلط ←</button>` : base;
+};
 const Diesel = {
   key: 'diesel', title: 'تعبئة الديزل', icon: '⛽', tables: ['refuels', 'odometer', 'settings'],
   st: {
@@ -2009,7 +2015,7 @@ const Diesel = {
     if (s === null || s === undefined || e === null || e === undefined || s === '' || e === '') return { km: null };
     s = +s; e = +e;
     if (e > s) return { km: e - s };
-    if (s >= 900000 && e < 100000) return { km: e + 1000000 - s, roll: true };
+    if (s >= 900000 && s < 1000000 && e < 100000) return { km: e + 1000000 - s, roll: true };   // لفّة عداد حقيقية بس (مش رقم مكتوب غلط)
     return { km: null, bad: e < s };
   },
   status(eff, nat) { if (!eff || eff <= 0 || !nat) return 'missing'; const r = eff / nat; return r >= 0.9 ? 'normal' : r >= 0.75 ? 'acceptable' : 'abnormal'; },
@@ -2075,7 +2081,7 @@ const Diesel = {
         ${kpi('لترات الفترة', fmt(lit), vsLY(lit, prevL ? prevL : null, { higherGood: false }))}
         ${kpi('متوسط الأسطول', fleet ? fmt(fleet, 1) + ' <small>كم/لتر</small>' : '—', fleet && lyFleet ? vsLY(fleet, lyFleet, { dec: 1 }) : `<span class="mut">المعدل الطبيعي ${fmt(fleetNat, 1)}</span>`)}
         ${kpi('استهلاك غير طبيعي', fmt(abn.length), `<span class="${abn.length ? 'down' : 'up'}">${esc(abn.slice(0, 3).map(x => x.v).join('، ')) || 'لا يوجد'}</span>`, abn.length ? 'st-bad' : '')}
-        ${kpi('قراءات ناقصة', fmt(miss.length), '<span class="mut">سجّلها ليُحسب المعدل</span>')}
+        ${kpi('قراءات ناقصة', fmt(miss.length), miss.length ? `<button class="btn ghost sm" data-act="ds-issues" data-vids="${miss.map(x => x.vid).join(',')}">اعرض فين المشكلة ←</button>` : '<span class="mut">كل القراءات سليمة</span>')}
       </div>
       ${card('المعدل الفعلي مقابل الطبيعي', 'كم لكل لتر؛ العلامة البيضاء هي المعدل الطبيعي للمركبة، واللون حسب الحالة',
         hbars(ss.map(x => [`${x.v} · ${x.vt}`, x.eff, STATUS[x.code][2], x.nat]), { dec: 1, unit: 'كم/لتر' }), 's7')}
@@ -2090,7 +2096,7 @@ const Diesel = {
   sumTable(s) {
     return table(['السيارة', 'النوع', 'اللترات', 'بداية العداد', 'نهاية العداد', 'المسافة (كم)', 'المعدل الفعلي', 'المعدل الطبيعي', 'الحالة'],
       s.map(x => [esc(x.v), esc(x.vt), fmt(x.l), x.start === null ? '—' : fmt(x.start), x.end === null ? '—' : fmt(x.end),
-        x.km ? fmt(x.km) + (x.roll ? ' <small class="mut">(العداد لفّ)</small>' : '') : '—', x.eff ? fmt(x.eff, 2) : '—', fmt(x.nat, 1), pill(x.code)]), { num: [2, 3, 4, 5, 6, 7] });
+        x.km ? fmt(x.km) + (x.roll ? ' <small class="mut">(العداد لفّ)</small>' : '') : '—', x.eff ? fmt(x.eff, 2) : '—', fmt(x.nat, 1), pill(x.code, x.vid)]), { num: [2, 3, 4, 5, 6, 7] });
   },
 
   // ---------------- السند الشهري ----------------
@@ -2149,10 +2155,48 @@ const Diesel = {
       toast(`✓ تمت إضافة ${fmt(lit)} لترًا للسيارة ${v.number}`); a.lit = ''; App.render();
     } catch (er) { box.innerHTML = `<div class="err">${esc(arErr(er))}</div>`; btn.disabled = false; }
   },
+  // مشاكل قراءات العداد لمركبة: كل شهر فيه تعبئات وقراءاته ناقصة أو غلط
+  issues(vid) {
+    const has = v => v !== null && v !== undefined && v !== '', out = [];
+    for (const m of [...new Set(this.rows().filter(r => r.vid === vid).map(r => r.ym))].sort().reverse()) {
+      const o = this.odo(m, vid) || {}, s = o.start_km, e = o.end_km, p = this.odo(prevMonth(m), vid), pe = p && has(p.end_km) ? +p.end_km : null, cur = m === thisMonth();
+      let why = null, warn = false;
+      if (!has(s) && !has(e)) { why = 'قراءات العداد مش متسجّلة للشهر ده'; warn = cur; }
+      else if (!has(s)) why = 'قراءة بداية الشهر مش متسجّلة';
+      else if (!has(e)) { why = cur ? 'الشهر لسه مخلصش: سجّل قراءة النهاية في آخر الشهر' : 'قراءة نهاية الشهر مش متسجّلة'; warn = cur; }
+      else if (+s > 999999 || +e > 999999) why = 'رقم فيه أكتر من 6 أرقام (غالبًا اتكتب غلط)';
+      else if (this.distance(s, e).km === null) why = 'قراءة النهاية أصغر من البداية';
+      else if (pe !== null && pe !== +s && Math.abs(pe - +s) > 1000) { why = `البداية مختلفة كتير عن نهاية الشهر اللي قبله`; warn = true; }
+      if (why) out.push({ m, s: has(s) ? +s : null, e: has(e) ? +e : null, pe, why, warn });
+    }
+    return out;
+  },
+  showIssues(vids) {
+    const list = vids.map(v => [v, this.issues(v)]).filter(([, l]) => l.length), can = Data.level('diesel') >= 2;
+    const n = v => v === null ? '<span class="mut">فاضي</span>' : fmt(v);
+    modal(`<h3>🔎 مشاكل قراءات العداد</h3><p class="mut">كل سطر فيه الشهر والمشكلة. ${can ? 'دوس «صحّح ←» وهينقلك على الشهر والعربية على طول؛ صحّح الرقم من الورق ودوس «حفظ القراءات».' : 'اطلب من المسؤول عن قسم الديزل يصحّحها.'}</p>
+      ${list.length ? list.map(([vid, l]) => { const v = Data.veh.get(vid) || {};
+        return `<h4 style="margin:14px 0 6px">🚚 ${esc(v.number || '?')} — ${esc(v.type || '')}</h4><div class="tbl"><table><thead><tr><th>الشهر</th><th class="num">البداية</th><th class="num">النهاية</th><th>المشكلة</th><th class="num">نهاية الشهر اللي قبله</th><th></th></tr></thead><tbody>
+        ${l.map(x => `<tr><td>${monthLabel(x.m)}</td><td class="num">${n(x.s)}</td><td class="num">${n(x.e)}</td><td class="${x.warn ? 'mut' : 'st-bad'}">${x.warn ? 'ملاحظة: ' : ''}${esc(x.why)}</td><td class="num">${x.pe === null ? '—' : fmt(x.pe)}</td>
+          <td>${can ? `<button class="btn sm" data-act="ds-goto" data-m="${x.m}" data-vid="${vid}">صحّح ←</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`; }).join('')
+      : '<div class="ok">مفيش مشاكل في القراءات.</div>'}
+      <div style="margin-top:14px"><button class="btn ghost" data-act="close">إغلاق</button></div>`, 860);
+  },
+  // ينقلك على السند الشهري للشهر ده ويحدد خانة العربية
+  async goto(m, vid) {
+    closeModal(); this.st.tab = 'mon'; LS.set('qw_ds_tab', 'mon'); this.st.mon.month = m;
+    if (App.page !== 'diesel') await App.open('diesel'); else App.render();
+    const el = $(`[data-odo="${vid}"][data-f="s"]`); if (!el) return;
+    const tr = el.closest('tr'); tr.style.outline = '3px solid var(--accent)'; tr.style.outlineOffset = '-3px';
+    el.scrollIntoView({ block: 'center' }); el.focus(); el.select && el.select();
+    setTimeout(() => { tr.style.outline = ''; }, 6000);
+  },
   async saveOdo(btn) {
     const month = this.st.mon.month, box = $('#ds-odo-msg'), vals = new Map();
     for (const el of $$('[data-odo]')) { const vid = +el.dataset.odo, x = vals.get(vid) || {}; x[el.dataset.f] = el.value === '' ? null : +el.value; vals.set(vid, x); }
     const bad = [...vals.entries()].filter(([, x]) => x.s !== null && x.e !== null && x.e < x.s && !this.distance(x.s, x.e).roll).map(([vid]) => (Data.veh.get(vid) || {}).number);
+    const big = [...vals.entries()].filter(([, x]) => (x.s !== null && x.s > 999999) || (x.e !== null && x.e > 999999)).map(([vid]) => (Data.veh.get(vid) || {}).number);
+    if (big.length) { box.innerHTML = `<div class="err">رقم فيه أكتر من 6 أرقام (غالبًا اتكتب غلط) في: ${esc(big.join('، '))}</div>`; return; }
     if (bad.length) { box.innerHTML = `<div class="err">قراءة النهاية أقل من البداية في: ${esc(bad.join('، '))}</div>`; return; }
     btn.disabled = true;
     try {
@@ -2218,7 +2262,7 @@ const Diesel = {
     const perRows = [...per.entries()].map(([vid, x]) => {
       let km = 0, lm = 0;
       for (const m of x.ms) { const o = this.odo(m, vid); const dd = o ? this.distance(o.start_km, o.end_km) : { km: null }; if (dd.km) { km += dd.km; lm += all.filter(r => r.vid === vid && r.ym === m).reduce((a, r) => a + r.l, 0); } }
-      const eff = lm ? km / lm : null, nat = this.natural(vid); return { ...x, eff, nat, code: this.status(eff, nat) };
+      const eff = lm ? km / lm : null, nat = this.natural(vid); return { ...x, vid, eff, nat, code: this.status(eff, nat) };
     }).sort((a, b) => b.l - a.l);
     this._rep = { f, t, d };
     return `<div class="card" style="margin-bottom:14px"><h3>استعلام: لترات سائق أو سيارة خلال فترة</h3>
@@ -2233,7 +2277,7 @@ const Diesel = {
         : '<div class="empty">لا توجد تعبئات مطابقة</div>'}</div>
       ${card('تقرير كل مركبة (جميع الشهور)', 'المعدل الفعلي محسوب على الشهور التي لها قراءات عداد كاملة',
         table(['السيارة', 'النوع', 'إجمالي اللترات', 'عدد الشهور', 'المعدل الفعلي', 'المعدل الطبيعي', 'الحالة'],
-          perRows.map(x => [esc(x.v), esc(x.vt), fmt(x.l), x.ms.size, x.eff ? fmt(x.eff, 2) : '—', fmt(x.nat, 1), pill(x.code)]), { num: [2, 3, 4, 5] }))}`;
+          perRows.map(x => [esc(x.v), esc(x.vt), fmt(x.l), x.ms.size, x.eff ? fmt(x.eff, 2) : '—', fmt(x.nat, 1), pill(x.code, x.vid)]), { num: [2, 3, 4, 5] }))}`;
   },
 
   // ---------------- الإعدادات ----------------
@@ -2269,6 +2313,7 @@ const Diesel = {
   },
   act: {
     'add': (t) => Diesel.addRefuel(t), 'save-odo': (t) => Diesel.saveOdo(t),
+    'issues': (t) => Diesel.showIssues(t.dataset.vids.split(',').map(Number)), 'goto': (t) => Diesel.goto(t.dataset.m, +t.dataset.vid),
     'del': (t) => Diesel.confirmDel(+t.dataset.id), 'do-del': (t) => Diesel.doDel(+t.dataset.id, t),
     'del-month': (t) => Diesel.confirmDelMonth(t.dataset.m), 'do-del-month': (t) => Diesel.doDelMonth(t),
     'save-gen': (t) => Diesel.saveGen(t), 'save-rates': (t) => Diesel.saveRates(t),
@@ -3895,7 +3940,8 @@ function sparkSVG(vals, color) {
   return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" style="display:block;margin-top:6px"><polyline points="${v.map((y, i) => X(i).toFixed(1) + ',' + Y(y).toFixed(1)).join(' ')}" fill="none" style="stroke:${color}" stroke-width="2"/>
     <circle cx="${X(v.length - 1)}" cy="${Y(v[v.length - 1])}" r="3" style="fill:${color}"/></svg>`;
 }
-const box = ([k, t]) => `<div class="${k === 'bad' ? 'err' : k === 'warn' ? 'warnbox' : k === 'good' ? 'ok' : 'infobox'}">${t}</div>`;
+// تنبيه؛ ولو ليه مكان (قسم أو تفاصيل) بيظهر جنبه زرار يوديك عليه على طول
+const box = ([k, t, go]) => `<div class="${k === 'bad' ? 'err' : k === 'warn' ? 'warnbox' : k === 'good' ? 'ok' : 'infobox'}">${t}${go ? ` <button class="btn ghost sm" style="margin-inline-start:8px" ${go}>اعرض ←</button>` : ''}</div>`;
 
 const Home = {
   key: 'home', title: 'الرئيسية', icon: '🏠', always: true, st: { tab: 'main' },
@@ -3909,7 +3955,7 @@ const Home = {
     const brief = [], tiles = [], activity = [];
     if (allowed.includes('cars')) {
       const r = Cars.rows(), mm = groupSum(r, x => x.ym, x => x.a);
-      if ((mm.get(pm) || 0) > 0 && (mm.get(cur) || 0) > mm.get(pm) * 1.25) brief.push(['warn', `مصروفات الصيانة هذا الشهر أعلى من الشهر السابق بنسبة ${fmt(((mm.get(cur) || 0) / mm.get(pm) - 1) * 100)}%.`]);
+      if ((mm.get(pm) || 0) > 0 && (mm.get(cur) || 0) > mm.get(pm) * 1.25) brief.push(['warn', `مصروفات الصيانة هذا الشهر أعلى من الشهر السابق بنسبة ${fmt(((mm.get(cur) || 0) / mm.get(pm) - 1) * 100)}%.`, 'data-nav="cars"']);
       const n = r.filter(x => x.ym === cur).length;
       tiles.push(['cars', 'مصروفات الصيانة هذا الشهر', fmt(mm.get(cur) || 0, 1) + ' <small>د.ك</small>', `${n} فاتورة هذا الشهر`, months.map(m => mm.get(m) || 0)]); activity.push(['cars', n]);
       this._mm = months.map(m => mm.get(m) || 0);
@@ -3917,8 +3963,8 @@ const Home = {
     let near = [];
     if (allowed.includes('materials')) {
       const act = Materials.batches().filter(b => b.rem > 0.0001), exp = act.filter(b => b.code === 'expired'), urg = act.filter(b => b.code === 'urgent');
-      if (exp.length) { const b = [...exp].sort((a, c) => c.rem - a.rem)[0]; brief.push(['bad', `الدفعة <b>${esc(b.no)}</b> (${esc(b.mat)}) منتهية منذ ${Math.abs(b.left)} يومًا وما زال بها ${fmt(b.rem)} كجم.`]); }
-      if (urg.length) brief.push(['warn', `${urg.length} دفعة تنتهي خلال أيام قليلة، بإجمالي ${fmt(urg.reduce((s, b) => s + b.rem, 0))} كجم.`]);
+      if (exp.length) { const b = [...exp].sort((a, c) => c.rem - a.rem)[0]; brief.push(['bad', `الدفعة <b>${esc(b.no)}</b> (${esc(b.mat)}) منتهية منذ ${Math.abs(b.left)} يومًا وما زال بها ${fmt(b.rem)} كجم.`, 'data-nav="materials"']); }
+      if (urg.length) brief.push(['warn', `${urg.length} دفعة تنتهي خلال أيام قليلة، بإجمالي ${fmt(urg.reduce((s, b) => s + b.rem, 0))} كجم.`, 'data-nav="materials"']);
       const iss = Materials.issues().filter(i => i.kind === 'prod'), ms = groupSum(iss, i => i.ym, i => i.qty);
       tiles.push(['materials', 'رصيد المواد', fmt(act.reduce((s, b) => s + b.rem, 0) / 1000, 1) + ' <small>طن</small>', exp.length ? `${exp.length} دفعة منتهية` : 'كل الدفعات سارية', months.map(m => ms.get(m) || 0)]);
       near = act.filter(b => b.exp).sort((a, b) => a.exp.localeCompare(b.exp)).slice(0, 5);
@@ -3926,19 +3972,21 @@ const Home = {
     }
     if (allowed.includes('diesel')) {
       const r = Diesel.rows(), ml = groupSum(r, x => x.ym, x => x.l), now = r.filter(x => x.ym === cur);
-      for (const s of Diesel.summary(now, cur).filter(s => s.code === 'abnormal').slice(0, 2)) brief.push(['warn', `المركبة <b>${esc(s.v)}</b> تقطع ${fmt(s.eff, 1)} كم لكل لتر هذا الشهر، والطبيعي ${fmt(s.nat, 1)}.`]);
+      for (const s of Diesel.summary(now, cur).filter(s => s.code === 'abnormal').slice(0, 2)) brief.push(['warn', `المركبة <b>${esc(s.v)}</b> تقطع ${fmt(s.eff, 1)} كم لكل لتر هذا الشهر، والطبيعي ${fmt(s.nat, 1)}.`, 'data-nav="diesel"']);
+      const missP = Diesel.summary(r.filter(x => x.ym === pm), pm).filter(s => s.code === 'missing');
+      if (missP.length) brief.push(['warn', `${missP.length} مركبة قراءات العداد بتاعتها ناقصة أو فيها غلط في ${monthLabel(pm)}، فمعدل استهلاكها مش محسوب.`, `data-act="ds-issues" data-vids="${missP.map(x => x.vid).join(',')}"`]);
       tiles.push(['diesel', 'ديزل هذا الشهر', fmt(ml.get(cur) || 0) + ' <small>لتر</small>', `${now.length} تعبئة`, months.map(m => ml.get(m) || 0)]); activity.push(['diesel', now.length]);
     }
     if (allowed.includes('performance')) {
       const r = Performance.rows(), [, mt] = Performance.thr(), now = r.filter(x => x.ym === cur);
       const accs = months.map(m => { const x = r.filter(y => y.ym === m); return x.length ? Performance.wacc(x) : null; });
       const low = Performance.ranking(now).filter(w => w.acc < mt);
-      if (low.length) { const w = low[low.length - 1]; brief.push(['bad', `<b>${esc(w.wk)}</b> دون حد ${fmt(mt)}% في دقة الجرد هذا الشهر (${fmt(w.acc, 1)}%).`]); }
+      if (low.length) { const w = low[low.length - 1]; brief.push(['bad', `<b>${esc(w.wk)}</b> دون حد ${fmt(mt)}% في دقة الجرد هذا الشهر (${fmt(w.acc, 1)}%).`, 'data-nav="performance"']); }
       tiles.push(['performance', 'دقة الجرد هذا الشهر', accs[accs.length - 1] === null ? '—' : fmt(accs[accs.length - 1], 1) + '%', `${now.length} جرد`, accs.filter(a => a !== null)]); activity.push(['performance', now.length]);
     }
     if (allowed.includes('employees')) {
       const r = Employees.rows(), th = Employees.th(), y0 = today().slice(0, 4) + '-01-01', ev = Employees.evaluation(r.filter(x => x.date >= y0));
-      for (const e of ev.filter(e => e.pts >= th).sort((a, b) => b.pts - a.pts).slice(0, 1)) brief.push(['info', `<b>${esc(e.emp)}</b> بلغ ${fp(e.pts)} نقطة سلبية منذ بداية العام ويحتاج متابعة.`]);
+      for (const e of ev.filter(e => e.pts >= th).sort((a, b) => b.pts - a.pts).slice(0, 1)) brief.push(['info', `<b>${esc(e.emp)}</b> بلغ ${fp(e.pts)} نقطة سلبية منذ بداية العام ويحتاج متابعة.`, 'data-nav="employees"']);
       tiles.push(['employees', 'موظفون بتقييم ممتاز', fmt(ev.filter(e => e.pts <= 0).length), `من ${ev.length} موظفًا، منذ بداية العام`, months.map(m => r.filter(x => x.ym === m).length)]);
       activity.push(['employees', r.filter(x => x.ym === cur).length]);
     }
