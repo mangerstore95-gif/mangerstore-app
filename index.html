@@ -215,7 +215,7 @@ const DEFAULT_URL = 'https://masodssfbppadcfqkfcp.supabase.co';
 const DEFAULT_KEY = 'sb_publishable_nAjjVRgAlfwzg3MYDn7OGQ_RH5efYKP';   // المفتاح العام (publishable) — آمن للنشر
 const DOMAIN = 'qattami.app';                 // اسم الدخول amir ⇐ amir@qattami.app (أو إيميل حقيقي مربوط بالمستخدم)
 const OLD_APP = 'https://mangerstore-system.streamlit.app';
-const VERSION = 'web-3.8';
+const VERSION = 'web-3.9';
 const PAGE = 1000;                            // أقصى عدد صفوف يرجعه Supabase في الطلب الواحد
 const LS = {
   get(k, d = null) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
@@ -2166,8 +2166,11 @@ const Diesel = {
       else if (!has(s)) why = 'قراءة بداية الشهر مش متسجّلة';
       else if (!has(e)) { why = cur ? 'الشهر لسه مخلصش: سجّل قراءة النهاية في آخر الشهر' : 'قراءة نهاية الشهر مش متسجّلة'; warn = cur; }
       else if (+s > 999999 || +e > 999999) why = 'رقم فيه أكتر من 6 أرقام (غالبًا اتكتب غلط)';
+      else if (+s === 0 && +e === 0) why = 'القراءات متسجّلة صفر، يعني مش متسجّلة فعلًا';
+      else if (+s === +e) why = 'البداية والنهاية نفس الرقم';
       else if (this.distance(s, e).km === null) why = 'قراءة النهاية أصغر من البداية';
-      else if (pe !== null && pe !== +s && Math.abs(pe - +s) > 1000) { why = `البداية مختلفة كتير عن نهاية الشهر اللي قبله`; warn = true; }
+      else if (pe !== null && pe !== +s && Math.abs(pe - +s) > 1000) { warn = true;
+        why = pe === 0 ? `نهاية الشهر اللي قبله متسجّلة صفر؛ صحّح الشهر اللي قبله` : `بداية الشهر ده (${fmt(+s)}) المفروض تكون قريبة من نهاية الشهر اللي قبله (${fmt(pe)})؛ واحدة منهم غالبًا غلط`; }
       if (why) out.push({ m, s: has(s) ? +s : null, e: has(e) ? +e : null, pe, why, warn });
     }
     return out;
@@ -2178,7 +2181,7 @@ const Diesel = {
     modal(`<h3>🔎 مشاكل قراءات العداد</h3><p class="mut">كل سطر فيه الشهر والمشكلة. ${can ? 'دوس «صحّح ←» وهينقلك على الشهر والعربية على طول؛ صحّح الرقم من الورق ودوس «حفظ القراءات».' : 'اطلب من المسؤول عن قسم الديزل يصحّحها.'}</p>
       ${list.length ? list.map(([vid, l]) => { const v = Data.veh.get(vid) || {};
         return `<h4 style="margin:14px 0 6px">🚚 ${esc(v.number || '?')} — ${esc(v.type || '')}</h4><div class="tbl"><table><thead><tr><th>الشهر</th><th class="num">البداية</th><th class="num">النهاية</th><th>المشكلة</th><th class="num">نهاية الشهر اللي قبله</th><th></th></tr></thead><tbody>
-        ${l.map(x => `<tr><td>${monthLabel(x.m)}</td><td class="num">${n(x.s)}</td><td class="num">${n(x.e)}</td><td class="${x.warn ? 'mut' : 'st-bad'}">${x.warn ? 'ملاحظة: ' : ''}${esc(x.why)}</td><td class="num">${x.pe === null ? '—' : fmt(x.pe)}</td>
+        ${l.map(x => `<tr><td>${monthLabel(x.m)}</td><td class="num">${n(x.s)}</td><td class="num">${n(x.e)}</td><td class="${x.warn ? 'mut' : 'st-bad'}" style="white-space:normal;min-width:200px">${x.warn ? 'ملاحظة: ' : ''}${esc(x.why)}</td><td class="num">${x.pe === null ? '—' : fmt(x.pe)}</td>
           <td>${can ? `<button class="btn sm" data-act="ds-goto" data-m="${x.m}" data-vid="${vid}">صحّح ←</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`; }).join('')
       : '<div class="ok">مفيش مشاكل في القراءات.</div>'}
       <div style="margin-top:14px"><button class="btn ghost" data-act="close">إغلاق</button></div>`, 860);
