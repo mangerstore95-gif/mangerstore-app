@@ -215,7 +215,7 @@ const DEFAULT_URL = 'https://masodssfbppadcfqkfcp.supabase.co';
 const DEFAULT_KEY = 'sb_publishable_nAjjVRgAlfwzg3MYDn7OGQ_RH5efYKP';   // المفتاح العام (publishable) — آمن للنشر
 const DOMAIN = 'qattami.app';                 // اسم الدخول amir ⇐ amir@qattami.app (أو إيميل حقيقي مربوط بالمستخدم)
 const OLD_APP = 'https://mangerstore-system.streamlit.app';
-const VERSION = 'web-4.7';
+const VERSION = 'web-4.8';
 const PAGE = 1000;                            // أقصى عدد صفوف يرجعه Supabase في الطلب الواحد
 const LS = {
   get(k, d = null) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
@@ -542,6 +542,18 @@ function gaugeSVG(pct, label, color) {
 const opt = (v, l, sel) => `<option value="${esc(v)}" ${String(sel) === String(v) ? 'selected' : ''}>${esc(l)}</option>`;
 const sel = (path, cur, items, { label = '', all = null, cls = '' } = {}) =>
   `<div class="f ${cls}">${label ? `<label>${label}</label>` : ''}<select data-k="${path}">${all !== null ? opt('', all, cur) : ''}${items.map(([v, l]) => opt(v, l, cur)).join('')}</select></div>`;
+// ---------------- كل القوائم المنسدلة بالترتيب الأبجدي ----------------
+// ماعدا القوائم اللي ليها ترتيب طبيعي (الفترات والشهور والأنواع والصلاحيات...). «الكل / — اختر —» تفضل فوق، و«+ جديد» تفضل تحت
+const KEEP_SEL = /\.(preset|p|n|mode|kind|month|f|t|show|ref|batch|hidden|page)$/;
+const abc = (a, b) => a.localeCompare(b, 'ar', { numeric: true, sensitivity: 'base' });
+function sortSelect(s) {
+  if (s.dataset.sorted || 'keep' in s.dataset || s.dataset.perm || s.dataset.f === 'severity' || ['bk-hours', 'ne-sev'].includes(s.id) || (s.dataset.k && KEEP_SEL.test(s.dataset.k))) return;
+  const os = [...s.options], v = s.value, head = os.filter(o => o.value === ''), tail = os.filter(o => o.value.startsWith('_')),
+    mid = os.filter(o => o.value !== '' && !o.value.startsWith('_')).sort((x, y) => abc(x.text.trim(), y.text.trim()));
+  s.dataset.sorted = '1'; for (const o of [...head, ...mid, ...tail]) s.appendChild(o); s.value = v;
+}
+new MutationObserver(ms => { for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1 && n.tagName !== 'OPTION') { if (n.tagName === 'SELECT') sortSelect(n); else n.querySelectorAll('select').forEach(sortSelect); } })
+  .observe(document.documentElement, { childList: true, subtree: true });
 const kpi = (l, v, note = '', cls = '') => `<div class="card kpi"><div class="l">${l}</div><div class="v ${cls}">${v}</div><div class="n">${note}</div></div>`;
 const card = (title, sub, body, span = '') => `<div class="card ${span}"><h3>${title}</h3>${sub ? `<div class="sub">${sub}</div>` : ''}${body}</div>`;
 function table(cols, rows, { num = [], max = 520 } = {}) {
