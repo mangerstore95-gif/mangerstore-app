@@ -215,7 +215,7 @@ const DEFAULT_URL = 'https://masodssfbppadcfqkfcp.supabase.co';
 const DEFAULT_KEY = 'sb_publishable_nAjjVRgAlfwzg3MYDn7OGQ_RH5efYKP';   // المفتاح العام (publishable) — آمن للنشر
 const DOMAIN = 'qattami.app';                 // اسم الدخول amir ⇐ amir@qattami.app (أو إيميل حقيقي مربوط بالمستخدم)
 const OLD_APP = 'https://mangerstore-system.streamlit.app';
-const VERSION = 'web-5.4';
+const VERSION = 'web-5.5';
 const PAGE = 1000;                            // أقصى عدد صفوف يرجعه Supabase في الطلب الواحد
 const LS = {
   get(k, d = null) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
@@ -409,7 +409,7 @@ const Cache = {
 // الجداول: تحميل كامل أول مرة (أو من الذاكرة)، ثم مزامنة: الجديد بالرقم + المعدّل بطابع الوقت + الحذف بالعدد
 // ============================================================================
 class Table {
-  constructor(name, cols, { stamp = null, small = false, opt = [] } = {}) { this.name = name; this.cols = cols; this.stampCol = stamp; this.small = small; this.opt = opt; this.rows = []; this.ready = false; this.v = 0; }
+  constructor(name, cols, { stamp = null, small = false, opt = [], optional = false } = {}) { this.name = name; this.cols = cols; this.stampCol = stamp; this.small = small; this.opt = opt; this.optional = optional; this.missing = false; this.rows = []; this.ready = false; this.v = 0; }
   // عمود جديد لسه متضافش على السيرفر (ملف SQL متشغّلش): نكمّل من غيره بدل ما القسم يقف
   has(col) { return this.cols.split(',').includes(col); }
   async sel(filter = '', onProgress) {
@@ -420,8 +420,10 @@ class Table {
   async load(onProgress) {
     if (this.ready) return 'mem';
     if (this.small) {   // الجداول الصغيرة: من السيرفر دائمًا، ومن الذاكرة لو مفيش إنترنت
-      try { this.rows = await API.selectAll(this.name, this.cols, '', onProgress); }
-      catch (e) { const c = await Cache.get('t:' + this.name); if (e.code !== 'network' || !c) throw e; this.rows = c.rows; }
+      try { this.rows = await API.selectAll(this.name, this.cols, '', onProgress); this.missing = false; }
+      catch (e) {
+        if (this.optional && e.code === '42P01') { this.rows = []; this.missing = true; this.ready = true; this.v++; return 'full'; }   // جدول جديد لسه متعملش على السيرفر
+        const c = await Cache.get('t:' + this.name); if (e.code !== 'network' || !c) { if (this.optional && e.code !== 'network') { this.rows = []; this.ready = true; this.v++; return 'full'; } throw e; } this.rows = c.rows; }
       this.ready = true; this.v++; this.save(); return 'full';
     }
     const c = await Cache.get('t:' + this.name);
@@ -431,7 +433,7 @@ class Table {
   save() { Cache.set('t:' + this.name, { url: CFG.url, cols: this.cols, rows: this.rows, at: Date.now() }); }
   async sync() {
     if (!this.ready) return false;
-    if (this.small) { const rows = await API.selectAll(this.name, this.cols); const ch = JSON.stringify(rows) !== JSON.stringify(this.rows); this.rows = rows; if (ch) this.v++; return ch; }
+    if (this.small) { if (this.missing) return false; const rows = await API.selectAll(this.name, this.cols); const ch = JSON.stringify(rows) !== JSON.stringify(this.rows); this.rows = rows; if (ch) this.v++; return ch; }
     const maxId = this.rows.reduce((m, x) => Math.max(m, x.id), 0), st = this.stamp();
     const [n, fresh, changed] = await Promise.all([
       API.count(this.name), this.sel(`id=gt.${maxId}`),
@@ -455,6 +457,7 @@ const T = {
   refuels: new Table('diesel_refuels', 'id,date,vehicle_id,driver_id,liters,created_by,created_at'),
   odometer: new Table('diesel_odometer', 'id,month,vehicle_id,start_km,end_km,updated_by,updated_at', { small: true }),
   settings: new Table('settings', 'key,value', { small: true }),
+  cust: new Table('customers', 'id,name,active', { small: true, optional: true }),
   ggroups: new Table('goods_groups', 'id,name,sort,active,factory_id', { small: true }),
   gitems: new Table('goods_items', 'id,group_id,name,sort,active', { small: true }),
   grec: new Table('goods_records', 'id,record_no,date,group_id,notes,factory_id,warehouse_id,created_by,created_at,updated_at', { stamp: 'updated_at' }),
@@ -564,12 +567,14 @@ new MutationObserver(ms => { for (const m of ms) for (const n of m.addedNodes) i
 const SAVE_ACT = /(^|-)(save|save-edit|add|recv|issue|transfer|save-iedit|save-batch)$/;
 function needField(f, inp, lab) {
   const name = lab.textContent.split('*')[0].replace(/[—:]/g, '').trim();
-  f.querySelectorAll('.fld-need').forEach(x => x.remove());
-  inp.style.outline = '2px solid #DD6A49'; inp.style.outlineOffset = '1px';
-  inp.insertAdjacentHTML('afterend', `<div class="fld-need" style="color:#DD6A49;font-size:12.5px;margin-top:4px">⬅ املأ «${esc(name)}» علشان تقدر تحفظ</div>`);
-  const clear = () => { inp.style.outline = ''; f.querySelectorAll('.fld-need').forEach(x => x.remove()); };
-  inp.addEventListener('input', clear, { once: true }); inp.addEventListener('change', clear, { once: true });
   inp.scrollIntoView({ block: 'center' }); inp.focus();
+  // الخانة ممكن تكون اترسمت من جديد لما اتعمل عليها focus (زي قائمة العملاء)، فنجيبها تاني
+  const el = f.querySelector('input:not([type=checkbox]):not([type=radio]),select,textarea') || inp;
+  f.querySelectorAll('.fld-need').forEach(x => x.remove());
+  el.style.outline = '2px solid #DD6A49'; el.style.outlineOffset = '1px';
+  (f.querySelector('label') || lab).insertAdjacentHTML('afterend', `<div class="fld-need" style="color:#DD6A49;font-size:12.5px;margin:2px 0 4px">⬅ املأ «${esc(name)}» علشان تقدر تحفظ</div>`);
+  const clear = () => { el.style.outline = ''; f.querySelectorAll('.fld-need').forEach(x => x.remove()); };
+  el.addEventListener('input', clear, { once: true }); el.addEventListener('change', clear, { once: true });
   toast(`املأ خانة «${name}» الأول`, true);
 }
 document.addEventListener('click', e => {
@@ -578,7 +583,7 @@ document.addEventListener('click', e => {
   for (const f of box.querySelectorAll('.f')) {
     const lab = f.querySelector('label'), inp = f.querySelector('input:not([type=checkbox]):not([type=radio]),select,textarea');
     if (!lab || !inp || !lab.textContent.includes('*') || inp.disabled || !inp.offsetParent) continue;
-    if (String(inp.value).trim() !== '') continue;
+    if (String(f.dataset.reqVal !== undefined ? f.dataset.reqVal : inp.value).trim() !== '') continue;
     e.preventDefault(); e.stopImmediatePropagation(); needField(f, inp, lab); return;
   }
 }, true);
@@ -1240,7 +1245,9 @@ const Pack = {
     for (const [k, t] of Object.entries(T)) {
       if (k === 'actlog') continue;
       onStep && onStep(t.name);
-      tables[t.name] = { cols: t.cols, rows: k === 'settings' ? await API.select('settings', 'select=key,value') : await t.sel() };
+      let rows = [];
+      try { rows = k === 'settings' ? await API.select('settings', 'select=key,value') : await t.sel(); } catch (e) { if (!t.optional) throw e; }
+      tables[t.name] = { cols: t.cols, rows };
     }
     const [e, v, r, f, w] = await Data._lookups();
     const ts = Date.now();
@@ -1805,7 +1812,7 @@ const ExcelApp = {
 // قسم الأوردرات المسلّمة
 // ============================================================================
 const Deliveries = {
-  key: 'deliveries', title: 'الأوردرات المسلّمة', icon: '🚚', tables: ['deliveries'],
+  key: 'deliveries', title: 'الأوردرات المسلّمة', icon: '🚚', tables: ['deliveries', 'cust'],
   st: {
     tab: LS.get('qw_dl_tab', 'dash'),
     dash: { fac: '', wh: '', kind: 'month', p: '' },
@@ -1926,7 +1933,44 @@ const Deliveries = {
   // اسم العميل: محتاج عمود customer على السيرفر (ملف «العملاء.sql»)
   hasCust() { return T.deliveries.has('customer'); },
   custField(st) { if (!this.hasCust()) return {}; const v = String(st.cust || '').split('+').map(x => x.trim().replace(/\s+/g, ' ')).filter(Boolean).join(' + '); return { customer: v || null }; },
-  customers() { const s = new Set(); for (const r of T.deliveries.rows) for (const c of String(r.customer || '').split('+')) { const x = c.trim(); if (x) s.add(x); } return [...s].sort(abc); },
+  // العملاء: من قائمة العملاء (الإكسيل القديم + اللي اتضافوا)، ومعاهم أي عميل اتكتب في سند قبل كده
+  customers() {
+    const s = new Set(T.cust.rows.filter(c => c.active !== 0).map(c => c.name));
+    for (const r of T.deliveries.rows) for (const c of String(r.customer || '').split('+')) { const x = c.trim(); if (x) s.add(x); }
+    return [...s].sort(abc);
+  },
+  // عميل جديد اتكتب في السند: يتضاف لقائمة العملاء علشان يظهر للكل بعد كده
+  async ensureCustomers(st) {
+    if (T.cust.missing || !this.hasCust()) return;
+    for (const name of this.chosen(st)) {
+      if (T.cust.rows.some(c => c.name === name)) continue;
+      try { const r = await API.insert('customers', { name, active: 1 }); if (r) T.cust.put(r); } catch (e) {}
+    }
+  },
+  chosen(st) { return String(st.cust || '').split('+').map(x => x.trim()).filter(Boolean); },
+  // قائمة منسدلة بالعملاء: تدوس عليها تفتح، تكتب تدوّر، تختار عميل أو أكتر، أو تضيف عميل جديد
+  custPicker(grp, st) {
+    return `<div class="f full" id="cp-${grp}" data-req-val="${esc(st.cust || '')}" style="position:relative"><label>اسم العميل * <span class="mut" style="font-weight:400">— اختار من القائمة (تقدر تختار أكتر من عميل لنفس الرحلة)</span></label>${this.custInner(grp, st)}</div>`;
+  },
+  custInner(grp, st, q = '', open = false) {
+    const ch = this.chosen(st), nq = q.trim(), all = this.customers().filter(c => !ch.includes(c));
+    const norm = x => x.replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/\s+/g, '');
+    const hits = nq ? all.filter(c => norm(c).includes(norm(nq))) : all, show = hits.slice(0, 300);
+    const exact = nq && this.customers().some(c => norm(c) === norm(nq));
+    return `${ch.length ? `<div class="chips" style="margin:2px 0 6px">${ch.map(c => `<span class="chip" style="display:inline-flex;gap:6px;align-items:center">${esc(c)}<button class="btn ghost sm" style="padding:0 6px;min-height:0" data-cp-rm="${grp}" data-c="${esc(c)}" title="شيل">✕</button></span>`).join('')}</div>` : ''}
+      <div style="position:relative"><input class="cp-q" data-cp="${grp}" value="${esc(q)}" autocomplete="off" style="width:100%;padding-left:34px" placeholder="${ch.length ? '➕ عميل تاني لنفس الرحلة (اختياري)…' : '— اختار العميل — (دوس هنا أو اكتب أول حروف الاسم)'}">
+        <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);pointer-events:none;color:var(--muted)">▾</span>
+      ${open ? `<div class="cp-list" style="position:absolute;z-index:30;inset-inline:0;top:100%;max-height:300px;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 30px rgba(0,0,0,.18);margin-top:4px">
+        ${nq && !exact ? `<div class="cp-it" data-cp-new="${grp}" data-c="${esc(nq)}" style="padding:9px 12px;cursor:pointer;font-weight:700;color:var(--accent)">➕ إضافة «${esc(nq)}» كعميل جديد</div>` : ''}
+        ${show.map(c => `<div class="cp-it" data-cp-pick="${grp}" data-c="${esc(c)}" style="padding:8px 12px;cursor:pointer;border-top:1px solid var(--line)">${esc(c)}</div>`).join('') || (nq ? '' : '<div class="mut" style="padding:10px">مفيش عملاء</div>')}
+        ${hits.length > show.length ? `<div class="mut" style="padding:8px 12px;font-size:12.5px">و${fmt(hits.length - show.length)} عميل كمان… اكتب حروف أكتر من الاسم</div>` : ''}</div>` : ''}</div>`;
+  },
+  cpRefresh(grp, q = '', open = false, focus = true) {
+    const box = $('#cp-' + grp); if (!box) return; const st = this.st[grp];
+    box.dataset.reqVal = st.cust || ''; const keep = [...box.querySelectorAll(':scope > label, :scope > .fld-need')].filter(x => !(x.classList.contains('fld-need') && st.cust)).map(x => x.outerHTML).join(''); box.innerHTML = keep + this.custInner(grp, st, q, open);
+    if (focus) { const i = box.querySelector('.cp-q'); this._cpb = true; try { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } finally { this._cpb = false; } }
+  },
+  cpAdd(grp, name) { const st = this.st[grp], ch = this.chosen(st); if (!ch.includes(name)) ch.push(name); st.cust = ch.join(' + '); this.cpRefresh(grp, '', false, false); },
   usesStore(fid) { const f = Data.fac.get(+fid); return !!(f && /ستايروبور|المواد العازلة/.test(f.name)); },
   form(st, grp, editing = null) {
     const p = 'dl.' + grp;
@@ -1941,8 +1985,7 @@ const Deliveries = {
       ${st.reg === '__new__' ? `<div class="f full"><label>اسم المنطقة الجديدة *</label><input data-k="${p}.regNew" value="${esc(st.regNew)}" placeholder="ستُضاف إلى القائمة تلقائيًا عند الحفظ"></div>` : ''}
       ${sel(p + '.drv', st.drv, Data.drivers(editing && editing.did).map(x => [x.id, x.name]), { label: 'السائق *', all: '— اختر —' })}
       <div class="f"><label>عدد الأوردرات *</label><input type="number" min="1" step="1" inputmode="numeric" data-k="${p}.orders" value="${esc(st.orders)}"></div>
-      ${this.hasCust() ? `<div class="f full"><label>اسم العميل * <span class="mut" style="font-weight:400">— لو أكتر من عميل في نفس الرحلة افصل بينهم بـ +</span></label><input list="dl-custs" data-k="${p}.cust" value="${esc(st.cust || '')}" placeholder="اكتب أول حرفين وهتطلعلك العملاء اللي اتسجّلوا قبل كده">
-        <datalist id="dl-custs">${this.customers().map(x => `<option value="${esc(x)}">`).join('')}</datalist></div>` : ''}
+      ${this.hasCust() ? this.custPicker(grp, st) : ''}
       ${sel(p + '.veh', st.veh, Data.vehicles(editing && editing.vid).map(x => [x.id, `${x.number} — ${x.type || ''}`]), { label: 'المركبة *', all: '— اختر —' })}
       <div class="f"><label>ملاحظات (اختياري)</label><input data-k="${p}.notes" value="${esc(st.notes)}"></div>
     </div>`;
@@ -1993,7 +2036,7 @@ const Deliveries = {
         } catch (e) { if (e.code !== '23505') throw e; await T.deliveries.sync(); }   // رقم السند أخذه جهاز آخر: نحدّث ونعيد
       }
       if (!row) throw new ApiError(409, '23505', 'تعارض في رقم السند، حاول مرة أخرى');
-      T.deliveries.put(row);
+      T.deliveries.put(row); this.ensureCustomers(st);
       const reg = (Data.reg.get(rid) || {}).name;
       log('deliveries', 'تسجيل توصيل', `${row.record_no} | ${reg} | ${row.orders}`);
       toast(`✓ تم حفظ ${row.record_no}: ${row.orders} أوردر إلى ${reg}. جاهز للمنطقة التالية.`);
@@ -2017,7 +2060,7 @@ const Deliveries = {
       const rid = await this.regionId(st);
       const row = await API.update('deliveries', this.editId, { date: st.date, driver_id: +st.drv, vehicle_id: +st.veh, region_id: rid, orders: +st.orders,
         ...this.custField(st), notes: st.notes.trim() || null, factory_id: +st.fac, warehouse_id: this.usesStore(st.fac) ? +st.wh : null, updated_by: Data.me.username, updated_at: nowKw() });
-      T.deliveries.put(row); log('deliveries', 'تعديل سند توصيل', r.no);
+      T.deliveries.put(row); this.ensureCustomers(st); log('deliveries', 'تعديل سند توصيل', r.no);
       closeModal(); toast('✓ تم حفظ التعديل'); App.render();
     } catch (e) { box.innerHTML = `<div class="err">${esc(arErr(e))}</div>`; btn.disabled = false; }
   },
@@ -2067,6 +2110,24 @@ const Deliveries = {
     'csv': (t) => { const R = Deliveries._rep; if (R) download(`deliveries_${t.dataset.key}_${R.f}_${R.t}.csv`, R.csv[t.dataset.key]); },
   },
 };
+
+// ---------------- القائمة المنسدلة للعملاء ----------------
+document.addEventListener('focusin', e => { if (Deliveries._cpb) return; const q = e.target.closest && e.target.closest('.cp-q'); if (q && !q.closest('.f').querySelector('.cp-list')) Deliveries.cpRefresh(q.dataset.cp, q.value, true); });
+document.addEventListener('input', e => { const q = e.target.closest && e.target.closest('.cp-q'); if (q) Deliveries.cpRefresh(q.dataset.cp, q.value, true); });
+document.addEventListener('mousedown', e => {
+  const it = e.target.closest('[data-cp-pick],[data-cp-new]'); if (!it) return;
+  e.preventDefault(); Deliveries.cpAdd(it.dataset.cpPick || it.dataset.cpNew, it.dataset.c);
+});
+document.addEventListener('click', e => {
+  const rm = e.target.closest('[data-cp-rm]');
+  if (rm) { const g = rm.dataset.cpRm, st = Deliveries.st[g]; st.cust = Deliveries.chosen(st).filter(c => c !== rm.dataset.c).join(' + '); Deliveries.cpRefresh(g, '', false, false); return; }
+  for (const box of document.querySelectorAll('.cp-list')) { const f = box.closest('[id^="cp-"]'); if (f && !f.contains(e.target)) Deliveries.cpRefresh(f.id.slice(3), '', false, false); }
+});
+document.addEventListener('keydown', e => {
+  const q = e.target.closest && e.target.closest('.cp-q'); if (!q) return;
+  if (e.key === 'Enter') { e.preventDefault(); const it = q.closest('.f').querySelector('.cp-list [data-cp-pick], .cp-list [data-cp-new]'); if (it) Deliveries.cpAdd(it.dataset.cpPick || it.dataset.cpNew, it.dataset.c); }
+  if (e.key === 'Escape') Deliveries.cpRefresh(q.dataset.cp, '', false, false);
+});
 // ============================================================================
 // قسم تعبئة الديزل
 // ============================================================================
@@ -4346,7 +4407,7 @@ const BACKUP = [
   ['materials', 'الأصناف', '*'], ['event_types', 'أنواع الأحداث', '*'], ['goods_groups', 'مجموعات البضاعة', '*'], ['goods_items', 'بنود البضاعة', '*'],
   ['deliveries', 'الأوردرات المسلمة', '*'], ['expenses', 'فواتير الصيانة', '*'], ['diesel_refuels', 'تعبئات الديزل', '*'], ['diesel_odometer', 'قراءات العداد', '*'],
   ['batches', 'دفعات المواد', '*'], ['issues', 'تحويلات المواد', '*'], ['perf_records', 'سجلات الجرد', '*'], ['emp_records', 'سندات الموظفين', '*'],
-  ['goods_records', 'سندات البضاعة', '*'], ['goods_lines', 'كميات البضاعة', '*'], ['activity_log', 'سجل النشاط', '*'], ['settings', 'الإعدادات', 'key,value']];
+  ['goods_records', 'سندات البضاعة', '*'], ['goods_lines', 'كميات البضاعة', '*'], ['activity_log', 'سجل النشاط', '*'], ['settings', 'الإعدادات', 'key,value'], ['customers', 'العملاء', '*']];
 const MASTER = {
   employees: { title: 'الموظفون', cols: [['name', 'الاسم', 'text'], ['job_title', 'المسمى الوظيفي', 'text'], ['is_driver', 'سائق', 'bool'], ['in_performance', 'في مؤشر الأداء', 'bool'], ['active', 'مفعّل', 'bool']],
     rows: () => [...Data.emp.values()].sort((a, b) => b.active - a.active || byName(a, b)) },
@@ -4355,6 +4416,7 @@ const MASTER = {
   warehouses: { title: 'المخازن', cols: [['name', 'اسم المخزن', 'text'], ['active', 'مفعّل', 'bool']], rows: () => [...Data.wh.values()].sort((a, b) => a.id - b.id) },
   factories: { title: 'المصانع', cols: [['name', 'اسم المصنع', 'text'], ['active', 'مفعّل', 'bool']], rows: () => [...Data.fac.values()].sort((a, b) => a.id - b.id) },
   regions: { title: 'المناطق', cols: [['name', 'اسم المنطقة', 'text'], ['active', 'مفعّلة', 'bool']], rows: () => [...Data.reg.values()].sort((a, b) => b.active - a.active || byName(a, b)) },
+  customers: { title: 'العملاء', cols: [['name', 'اسم العميل', 'text'], ['active', 'مفعّل', 'bool']], rows: () => [...T.cust.rows].sort((a, b) => b.active - a.active || abc(a.name, b.name)) },
 };
 
 // ---------------- النسخ الاحتياطي (مشترك بين صفحة المدير وتنبيه الرئيسية) ----------------
@@ -4366,7 +4428,8 @@ const Backup = {
     const sheets = [], counts = [];
     for (const [t, name, cols] of BACKUP) {
       onStep && onStep(name);
-      const rows = t === 'settings' ? await API.select('settings', 'select=key,value') : await API.selectAll(t, cols);
+      let rows = [];
+      try { rows = t === 'settings' ? await API.select('settings', 'select=key,value') : await API.selectAll(t, cols); } catch (e) { if (!(t === 'customers' && e.code === '42P01')) throw e; }
       const keys = rows.length ? Object.keys(rows[0]) : (cols === '*' ? ['id'] : cols.split(','));
       sheets.push([name, [keys, ...rows.map(r => keys.map(k => r[k] === null || r[k] === undefined ? '' : (typeof r[k] === 'object' ? JSON.stringify(r[k]) : r[k])))]]);
       counts.push([name, rows.length]);
@@ -4408,7 +4471,7 @@ const Backup = {
 
 const Admin = {
   key: 'admin', title: 'الإدارة', icon: '⚙️', always: true,
-  get tables() { return Data.me && Data.me.is_admin ? ['actlog'] : []; },
+  get tables() { return Data.me && Data.me.is_admin ? ['actlog', 'cust'] : []; },
   st: { tab: LS.get('qw_ad_tab', 'users'), mt: { t: 'employees' }, log: { preset: 'month', f: '', t: '', user: '', sec: '', q: '', page: 0 }, edit: {}, nu: {} },
   quiet(grp) { return grp === 'edit' || grp === 'nu'; },
   users: [], logins: new Map(),
@@ -4557,13 +4620,13 @@ const Admin = {
     try {
       for (const [id, o] of ch) await API.rpc('admin_save', { p_table: t, p_id: id, p_data: o });
       log('master', `تعديل ${M.title}`, ch.map(([id, o]) => (id ? '' : '+') + o[M.cols[0][0]]).join('، '));
-      await Data.lookups(); toast(`✓ تم حفظ ${ch.length} تعديل`); App.render();
+      await Data.lookups(); if (t === 'customers') await T.cust.sync(); toast(`✓ تم حفظ ${ch.length} تعديل`); App.render();
     } catch (er) { box.innerHTML = `<div class="err">${er.code === '23505' ? 'يوجد اسم أو رقم مكرر' : esc(arErr(er))}</div>`; btn.disabled = false; }
   },
   async delMaster(id, btn) {
     const t = this.st.mt.t, M = MASTER[t], r = M.rows().find(x => x.id === id), box = $('#mt-msg');
     if (!confirmInline(btn)) return;
-    try { await API.rpc('admin_delete', { p_table: t, p_id: id }); log('master', `حذف من ${M.title}`, r[M.cols[0][0]]); await Data.lookups(); toast('✓ تم الحذف'); App.render(); }
+    try { await API.rpc('admin_delete', { p_table: t, p_id: id }); log('master', `حذف من ${M.title}`, r[M.cols[0][0]]); await Data.lookups(); if (t === 'customers') await T.cust.sync(); toast('✓ تم الحذف'); App.render(); }
     catch (er) { box.innerHTML = `<div class="err">${er.code === '23503' ? `لا يمكن حذف «${esc(r[M.cols[0][0]])}» لأن عليه سجلات. ألغِ «مفعّل» بدلًا من الحذف.` : esc(arErr(er))}</div>`; }
   },
 
