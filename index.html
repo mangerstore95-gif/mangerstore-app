@@ -215,7 +215,7 @@ const DEFAULT_URL = 'https://masodssfbppadcfqkfcp.supabase.co';
 const DEFAULT_KEY = 'sb_publishable_nAjjVRgAlfwzg3MYDn7OGQ_RH5efYKP';   // المفتاح العام (publishable) — آمن للنشر
 const DOMAIN = 'qattami.app';                 // اسم الدخول amir ⇐ amir@qattami.app (أو إيميل حقيقي مربوط بالمستخدم)
 const OLD_APP = 'https://mangerstore-system.streamlit.app';
-const VERSION = 'web-5.0';
+const VERSION = 'web-5.1';
 const PAGE = 1000;                            // أقصى عدد صفوف يرجعه Supabase في الطلب الواحد
 const LS = {
   get(k, d = null) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
@@ -4700,6 +4700,17 @@ const RULE_NAMES = { 'zero:ref': 'تعبئة بصفر لتر', 'big:ref': 'لت�
   'zero:exp': 'فاتورة بصفر', 'big:exp': 'مبلغ صيانة كبير بشكل غريب', 'dup:exp': 'رقم فاتورة متكرر', 'zero:dl': 'سند أوردرات بصفر', 'big:dl': 'عدد أوردرات كبير بشكل غريب', 'dup:dl': 'سند أوردرات متكرر',
   'zero:gd': 'سند بضاعة بصفر', 'dup:gd': 'سند بضاعة متكرر', 'exp:b': 'الانتهاء قبل الإنتاج', 'zero:b': 'دفعة بصفر', 'over:b': 'المسحوب أكبر من الدفعة', 'zero:i': 'تحويل بصفر',
   'zero:pf': 'جرد بصفر أصناف', 'err:pf': 'الأخطاء أكبر من الأصناف', future: 'تاريخ في المستقبل', old: 'تاريخ قديم جدًا' };
+// السند المكرر: نفس البيانات واتسجّل في نفس الوقت تقريبًا (لو اتسجّل في وقت مختلف غالبًا رحلة/تعبئة تانية حقيقية)
+const DUP_MIN = 10;
+const tms = v => v ? Date.parse(String(v).replace(' ', 'T') + 'Z') : NaN;
+function dupOf(seen, k, r) {
+  const list = seen.get(k) || [], t = tms(r.created_at);
+  const hit = list.find(o => isNaN(t) || isNaN(o.t) || Math.abs(t - o.t) <= DUP_MIN * 60000);
+  list.push({ id: r.id, t }); seen.set(k, list);
+  if (!hit) return null;
+  const m = isNaN(t) || isNaN(hit.t) ? null : Math.round(Math.abs(t - hit.t) / 60000);
+  return m === null ? '' : m === 0 ? ' — واتسجّلوا في نفس الدقيقة' : ` — واتسجّلوا بفرق ${m} دقيقة بس`;
+}
 const medMap = m => new Map([...m].map(([k, a]) => [k, [a.length, median(a)]]));
 const median = a => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 const Fixes = {
@@ -4712,7 +4723,7 @@ const Fixes = {
     const r = T.settings.rows.find(x => x.key === 'fix_dismissed'); let v = null;
     try { v = JSON.parse(r && r.value || 'null'); } catch (e) {}
     if (Array.isArray(v)) v = { d: v }; v = v || {};
-    return { d: v.d || [], n: v.n || {}, r: v.r || [] };
+    return { d: v.d || [], n: v.n || {}, r: v.r || [], s: v.s || [] };
   },
   dismissed() { return new Set(this.store().d); },
   // القاعدة اللي اتعلّمها البرنامج وبتخفي المشكلة دي (لو فيه)
@@ -4737,14 +4748,15 @@ const Fixes = {
       const R = T.refuels.rows, byV = new Map();
       for (const r of R) { if (!byV.has(r.vehicle_id)) byV.set(r.vehicle_id, []); byV.get(r.vehicle_id).push(+r.liters || 0); }
       const seen = new Map(), MV = medMap(byV);
-      for (const r of R) {
+      for (const r of [...R].sort((a, b) => a.id - b.id)) {
         curBy = r.created_by || '';
         const l = +r.liters || 0, what = () => `${vName(r.vehicle_id)} — ${fmt(l)} لتر`, go = { fn: 'dsEdit', args: [r.id] }, E = { ent: 'v' + r.vehicle_id, entL: () => `العربية ${vName(r.vehicle_id)}`, entsL: 'كل العربيات', val: l, unit: 'لتر' };
         if (l <= 0) push({ ...E, rc: 'zero:ref', sec: 'diesel', id: r.id, fp: `zero:ref:${r.id}:${l}`, no: '', date: r.date, what, why: 'تعبئة بصفر لتر', go, lv: 3 });
         const [n, md] = MV.get(r.vehicle_id);
         if (n >= 5 && l > md * 3 && l - md > 100) push({ ...E, rc: 'big:ref', sec: 'diesel', id: r.id, fp: `big:ref:${r.id}:${l}`, no: '', date: r.date, what, why: `لترات كتير بشكل غريب: المعتاد للعربية دي حوالي ${fmt(md)} لتر`, warn: true, go, lv: 3 });
         const k = `${r.vehicle_id}|${r.date}|${l}`;
-        if (seen.has(k)) push({ ...E, rc: 'dup:ref', sec: 'diesel', id: r.id, fp: `dup:ref:${r.id}:${k}`, no: '', date: r.date, what, why: 'تعبئة متكررة: نفس العربية ونفس اليوم ونفس اللترات', go, lv: 3 }); else seen.set(k, r.id);
+        const dr = dupOf(seen, k, r);
+        if (dr !== null) push({ ...E, rc: 'dup:ref', sec: 'diesel', id: r.id, fp: `dup:ref:${r.id}:${k}`, no: '', date: r.date, what, why: 'تعبئة متكررة: نفس العربية ونفس اليوم ونفس اللترات' + dr, go, lv: 3 });
         dateChk('diesel', r.id, '', r.date, what, go);
       }
       if (T.odometer.ready) for (const vid of byV.keys()) for (const x of Diesel.issues(vid)) {
@@ -4781,7 +4793,8 @@ const Fixes = {
         const [n, md] = MD.get(r.driver_id);
         if (n >= 5 && o > md * 3 && o - md >= 10) push({ ...E, rc: 'big:dl', sec: 'deliveries', id: r.id, fp: `big:dl:${r.id}:${o}`, no: r.record_no, date: r.date, what, why: `عدد أوردرات كبير بشكل غريب: المعتاد للسائق ده حوالي ${fmt(md)}`, warn: true, go, lv: 3 });
         const k = [r.date, r.driver_id, r.vehicle_id, r.region_id, r.factory_id, r.warehouse_id, o].join('|');
-        if (seen.has(k)) push({ ...E, rc: 'dup:dl', sec: 'deliveries', id: r.id, fp: `dup:dl:${r.id}:${k}`, no: r.record_no, date: r.date, what, why: 'سند متكرر: نفس اليوم والسائق والعربية والمنطقة والعدد', go, lv: 3 }); else seen.set(k, r.id);
+        const dd = dupOf(seen, k, r);
+        if (dd !== null) push({ ...E, rc: 'dup:dl', sec: 'deliveries', id: r.id, fp: `dup:dl:${r.id}:${k}`, no: r.record_no, date: r.date, what, why: 'سند متكرر: نفس اليوم والسائق والعربية والمنطقة والعدد' + dd, go, lv: 3 });
         dateChk('deliveries', r.id, r.record_no, r.date, what, go);
       }
     }
@@ -4794,7 +4807,8 @@ const Fixes = {
         const ls = L.get(r.id) || [], tot = ls.reduce((s, l) => s + (+l.qty || 0), 0), what = () => `${G.get(r.group_id) || '?'} — ${fmt(tot)}`, go = { fn: 'edit', args: ['goods', r.id] }, E = { ent: 'g' + r.group_id, entL: () => `المجموعة ${G.get(r.group_id) || '?'}`, entsL: 'كل المجموعات' };
         if (tot <= 0) push({ ...E, rc: 'zero:gd', sec: 'goods', id: r.id, fp: `zero:gd:${r.id}:${tot}`, no: r.record_no, date: r.date, what, why: 'سند كل كمياته صفر', go, lv: 3 });
         const k = [r.date, r.group_id, r.factory_id, r.warehouse_id, ls.map(l => l.item_id + ':' + l.qty).sort().join(',')].join('|');
-        if (tot > 0 && seen.has(k)) push({ ...E, rc: 'dup:gd', sec: 'goods', id: r.id, fp: `dup:gd:${r.id}:${k}`, no: r.record_no, date: r.date, what, why: 'سند متكرر: نفس اليوم والمجموعة ونفس الكميات', go, lv: 3 }); else seen.set(k, r.id);
+        const dg = tot > 0 ? dupOf(seen, k, r) : null;
+        if (dg !== null) push({ ...E, rc: 'dup:gd', sec: 'goods', id: r.id, fp: `dup:gd:${r.id}:${k}`, no: r.record_no, date: r.date, what, why: 'سند متكرر: نفس اليوم والمجموعة ونفس الكميات' + dg, go, lv: 3 });
         dateChk('goods', r.id, r.record_no, r.date, what, go);
       }
     }
@@ -4878,29 +4892,32 @@ const Fixes = {
   async save(S, msg) {
     const live = new Set(this.all().map(x => x.fp)), d = S.d.filter(k => live.has(k)), n = {};
     for (const k of d) if (S.n[k]) n[k] = S.n[k];
-    try { await API.upsert('settings', [{ key: 'fix_dismissed', value: JSON.stringify({ d, n, r: S.r }) }], 'key'); await T.settings.sync(); }
+    try { await API.upsert('settings', [{ key: 'fix_dismissed', value: JSON.stringify({ d, n, r: S.r, s: S.s || [] }) }], 'key'); await T.settings.sync(); }
     catch (e) { toast(e.code === '42501' || e.status === 403 ? 'محتاج تشغّل ملف «التصحيحات.sql» في Supabase مرة واحدة الأول' : arErr(e), true); return false; }
     this._v = null; toast(msg); closeModal(); App.render(); App.fixBadge(); return true;
   },
   async setDismissed(fp, on) { const S = this.store(); S.d = on ? [...new Set([...S.d, fp])] : S.d.filter(k => k !== fp); if (!on) delete S.n[fp]; return this.save(S, on ? '✓ اتجاهل' : '✓ رجع للقائمة'); },
   // «صح، تجاهل»: البرنامج بيسأل ليه، ويتعلّم من الإجابة
   askWhy(i) {
-    const x = this.all()[i]; if (!x) return; const rn = RULE_NAMES[x.rc] || x.why, hasV = x.val !== undefined && x.val !== null;
-    const opt = (v, html, on) => `<label style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:12px;margin-bottom:8px;cursor:pointer"><input type="radio" name="fx-why" value="${v}" ${on ? 'checked' : ''} style="margin-top:4px"><span>${html}</span></label>`;
+    const x = this.all()[i]; if (!x) return; const rn = RULE_NAMES[x.rc] || x.why, hasV = x.val !== undefined && x.val !== null, S = this.store();
+    const choice = (v, html, on) => `<label style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:12px;margin-bottom:8px;cursor:pointer"><input type="radio" name="fx-why" value="${v}" ${on ? 'checked' : ''} style="margin-top:4px"><span>${html}</span></label>`;
     const maxIn = id => hasV && x.rc.startsWith('big:') ? `<div style="margin-top:6px;font-size:13px">واعتبر لحد <input id="${id}" type="number" value="${Math.ceil(x.val)}" style="width:110px;display:inline-block"> ${esc(x.unit || '')} طبيعي، ونبّهني لو عدّى كده</div>` : '';
     modal(`<h3>🧠 ليه ده صح؟</h3><p class="mut">قولّي السبب علشان البرنامج يتعلّم ومايطلّعش حاجة زي دي تاني.</p>
       <div class="infobox" style="margin-bottom:12px"><b>${esc(x.what)}</b><br>${esc(x.why)}</div>
-      ${opt('once', '<b>صح المرة دي بس</b><div class="mut" style="font-size:12.5px">يختفي السطر ده بس، ولو حصلت حاجة زيه تاني يطلع عادي.</div>', true)}
-      ${x.ent ? opt('ent', `<b>ده طبيعي ${esc(li(x.entL))}</b><div class="mut" style="font-size:12.5px">تنبيه «${esc(rn)}» مش هيطلع تاني ${esc(li(x.entL))}.</div>${maxIn('fx-max-ent')}`) : ''}
-      ${x.ent ? opt('all', `<b>ده طبيعي ${esc(li(x.entsL))}</b><div class="mut" style="font-size:12.5px">تنبيه «${esc(rn)}» مش هيطلع تاني لأي حد.</div>${maxIn('fx-max-all')}`) : ''}
-      ${opt('off', `<b>مش عايز تنبيه «${esc(rn)}» خالص</b><div class="mut" style="font-size:12.5px">البرنامج هيبطّل يدوّر على الحاجة دي في كل الأقسام.</div>`)}
-      <div class="f" style="margin-top:6px"><label>اكتب السبب بكلامك (بيتحفظ عشان ترجعله وتعرف ليه)</label><textarea id="fx-note" rows="2" placeholder="مثلًا: العربية دي بتشتغل على خط طويل"></textarea></div>
+      ${choice('once', '<b>صح المرة دي بس</b><div class="mut" style="font-size:12.5px">يختفي السطر ده بس، ولو حصلت حاجة زيه تاني يطلع عادي.</div>', true)}
+      ${x.ent ? choice('ent', `<b>ده طبيعي ${esc(li(x.entL))}</b><div class="mut" style="font-size:12.5px">تنبيه «${esc(rn)}» مش هيطلع تاني ${esc(li(x.entL))}.</div>${maxIn('fx-max-ent')}`) : ''}
+      ${x.ent ? choice('all', `<b>ده طبيعي ${esc(li(x.entsL))}</b><div class="mut" style="font-size:12.5px">تنبيه «${esc(rn)}» مش هيطلع تاني لأي حد.</div>${maxIn('fx-max-all')}`) : ''}
+      ${choice('off', `<b>مش عايز تنبيه «${esc(rn)}» خالص</b><div class="mut" style="font-size:12.5px">البرنامج هيبطّل يدوّر على الحاجة دي في كل الأقسام.</div>`)}
+      ${S.s.length ? `<div class="f" style="margin-top:6px"><label>اختار سبب من الأسباب المحفوظة</label><select id="fx-saved"><option value="">— أو اكتب سبب جديد تحت —</option>${S.s.map(r => opt(r, r, '')).join('')}</select></div>` : ''}
+      <div class="f" style="margin-top:6px"><label>${S.s.length ? 'أو اكتب سبب جديد' : 'اكتب السبب بكلامك'} (بيتحفظ عشان ترجعله وتعرف ليه)</label><textarea id="fx-note" rows="2" placeholder="مثلًا: العربية دي بتشتغل على خط طويل"></textarea></div>
+      <label style="display:flex;gap:8px;align-items:center;margin-top:6px;font-size:13.5px"><input type="checkbox" id="fx-keep" checked> احفظ السبب ده في القائمة علشان أختاره بعد كده</label>
       <div id="fx-msg"></div>
       <div style="display:flex;gap:10px;margin-top:12px"><button class="btn" data-act="fx-learn" data-i="${i}">حفظ</button><button class="btn ghost" data-act="close">إلغاء</button></div>`, 640);
   },
   learn(i) {
     const x = this.all()[i]; if (!x) return closeModal();
     const how = ($('input[name="fx-why"]:checked') || {}).value || 'once', note = ($('#fx-note') || {}).value.trim(), S = this.store();
+    if (note && ($('#fx-keep') || {}).checked && !S.s.includes(note)) S.s = [...S.s, note];   // السبب الجديد يتحفظ في القائمة
     if (how !== 'once' && !note) { $('#fx-msg').innerHTML = '<div class="err">اكتب السبب بكلامك (سطر واحد يكفي) علشان تبقى عارف البرنامج اتعلّم إيه وليه.</div>'; $('#fx-note').focus(); return; }
     if (how === 'once') { S.d = [...new Set([...S.d, x.fp])]; if (note) S.n[x.fp] = note; return this.save(S, '✓ اتجاهل المرة دي'); }
     const mx = how === 'ent' ? $('#fx-max-ent') : how === 'all' ? $('#fx-max-all') : null, max = mx && mx.value !== '' ? +mx.value : null;
@@ -4915,7 +4932,10 @@ const Fixes = {
       fmt(all.filter(x => this.learned(x, [r])).length), this.canDismiss() ? `<button class="btn ghost sm" data-act="fx-unlearn" data-i="${i}">انسَ دي</button>` : '']);
     return `<div class="card hero" style="margin-bottom:14px"><h2>🧠 اللي اتعلّمه البرنامج منك</h2><p>كل مرة تقول «صح، تجاهل» وتختار إن الحاجة طبيعية، البرنامج بيحفظ القاعدة دي هنا. لو غيّرت رأيك دوس «انسَ دي» والتنبيهات ترجع.</p></div>
       <div class="filters">${this.viewSel('2', S)}</div>
-      <div class="card">${rows.length ? table(['التنبيه', 'على مين', 'الشرط', 'السبب', 'مين', 'إمتى', 'بيخفي', ''], rows, { num: [6], max: 900 }) : '<div class="empty">لسه البرنامج متعلّمش حاجة. أول ما تقول «صح، تجاهل» وتختار السبب، هيظهر هنا.</div>'}</div>`;
+      <div class="card">${rows.length ? table(['التنبيه', 'على مين', 'الشرط', 'السبب', 'مين', 'إمتى', 'بيخفي', ''], rows, { num: [6], max: 900 }) : '<div class="empty">لسه البرنامج متعلّمش حاجة. أول ما تقول «صح، تجاهل» وتختار السبب، هيظهر هنا.</div>'}</div>
+      <div class="card" style="margin-top:14px"><h3>📝 الأسباب المحفوظة</h3><div class="sub">بتظهر في القائمة المنسدلة لما تدوس «صح، تجاهل». تقدر تضيف سبب جديد من هنا أو من نافذة التجاهل.</div>
+        ${this.canDismiss() ? `<div class="inrow" style="margin:8px 0 12px"><div class="f" style="flex:3"><label>سبب جديد</label><input id="fx-new-r" placeholder="مثلًا: شحنة كبيرة لعميل خاص"></div><button class="btn" data-act="fx-addr">➕ إضافة</button></div>` : ''}
+        ${S.s.length ? S.s.slice().sort(abc).map(r => `<div class="rank"><span></span><span style="white-space:normal">${esc(r)}</span>${this.canDismiss() ? `<button class="btn ghost sm" data-act="fx-delr" data-r="${esc(r)}">حذف</button>` : ''}</div>`).join('') : '<div class="empty">لسه مفيش أسباب محفوظة</div>'}</div>`;
   },
   viewSel(v, S) { return sel('fx.list.hidden', v, [['1', 'اللي اتجاهلت'], ['2', `🧠 اللي اتعلّمه البرنامج (${S.r.length})`], ['3', '👤 أخطاء كل موظف']], { label: 'عرض', all: 'المفتوحة' }); },
   // اسم الموظف من اسم الدخول
@@ -4966,10 +4986,14 @@ const Fixes = {
     'more': () => { Fixes.st.list.more++; App.render(); },
     'sec': (t) => { Fixes.st.list.sec = t.dataset.sec; App.render(); },
     'clear': () => { Fixes.st.list.vids = ''; App.render(); },
+    'addr': () => { const v = ($('#fx-new-r') || {}).value.trim(); if (!v) return; const S = Fixes.store(); if (S.s.includes(v)) return toast('السبب ده موجود بالفعل', true); S.s = [...S.s, v]; Fixes.save(S, '✓ اتضاف للأسباب المحفوظة'); },
+    'delr': (t) => { const S = Fixes.store(); S.s = S.s.filter(r => r !== t.dataset.r); Fixes.save(S, '✓ اتشال من الأسباب المحفوظة'); },
     'clearby': () => { Fixes.st.list.by = ''; App.render(); },
     'by': (t) => { Object.assign(Fixes.st.list, { by: t.dataset.u, hidden: '', sec: '', kind: '', q: '', vids: '' }); App.render(); },
   },
 };
+// اختيار سبب محفوظ بيكتبه في خانة السبب
+document.addEventListener('change', e => { if (e.target.id !== 'fx-saved' || !e.target.value) return; $('#fx-note').value = e.target.value; $('#fx-keep').checked = false; });
 // ============================================================================
 // التطبيق: الدخول، الهيكل، التنقل
 // ============================================================================
