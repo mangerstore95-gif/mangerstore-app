@@ -215,7 +215,7 @@ const DEFAULT_URL = 'https://masodssfbppadcfqkfcp.supabase.co';
 const DEFAULT_KEY = 'sb_publishable_nAjjVRgAlfwzg3MYDn7OGQ_RH5efYKP';   // المفتاح العام (publishable) — آمن للنشر
 const DOMAIN = 'qattami.app';                 // اسم الدخول amir ⇐ amir@qattami.app (أو إيميل حقيقي مربوط بالمستخدم)
 const OLD_APP = 'https://mangerstore-system.streamlit.app';
-const VERSION = 'web-5.1';
+const VERSION = 'web-5.3';
 const PAGE = 1000;                            // أقصى عدد صفوف يرجعه Supabase في الطلب الواحد
 const LS = {
   get(k, d = null) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
@@ -2457,6 +2457,14 @@ const FAULTS = [
   ['محرك وناقل حركة', ['جير', 'محرك', 'ماكينة', 'ماكينه', 'رديتر', 'سير']]];
 const faultOf = t => { t = String(t || ''); for (const [n, w] of FAULTS) if (w.some(x => t.includes(x))) return n; return 'أخرى'; };
 const KWD = n => fmt(n, 3);
+// نوع الإصلاح بالتفصيل (للمقارنة بين أسعار نفس المشكلة)؛ لو مفيش كلمة معروفة بنقارن بنفس الوصف بالظبط
+const REPAIRS = [['تصليح بنشر', ['بنشر', 'رقعة', 'رقعه']], ['تيوب', ['تيوب']], ['تاير جديد', ['تاير', 'تواير', 'كفر']], ['تبديل زيت', ['تبديل زيت', 'زيت ماكينة', 'زيت ماكينه', 'غيار زيت']], ['فلتر', ['فلتر']],
+  ['غاز مكيف', ['غاز']], ['كمبروسر مكيف', ['كمبروس']], ['ثلاجة مكيف', ['ثلاجة', 'ثلاجه']], ['دينمو', ['دينمو', 'دينامو']], ['بطارية', ['بطارية', 'بطاريه']], ['لمبات', ['لمبة', 'لمبات', 'ليتات', 'لمبه']],
+  ['سفايف وفحمات', ['سفايف', 'فحمات', 'فحمه', 'فحمة', 'بريك']], ['كلاتش ودسك', ['كلاتش', 'دسك']], ['جير', ['جير', 'قير']], ['بخاخات', ['بخاخ']], ['قايش', ['قايش']], ['سيرفس', ['سريفس', 'سيرفس', 'سرفس']], ['نقل وسطحة', ['نقل ', 'سطحة', 'ونش']]];
+const repairOf = t => { t = ' ' + String(t || '') + ' '; for (const [n, w] of REPAIRS) if (w.some(x => t.includes(x))) return n; return null; };
+// عدد القطع لو مكتوب في الوصف (زي «2تاير»)، علشان نقارن سعر القطعة الواحدة
+const repairQty = t => { const m = /(\d+)\s*(?:تاير|تواير|كفر|بطاري)/.exec(String(t || '')) || /(?:تاير|تواير)\s*(\d+)(?!\d)/.exec(String(t || '')); const n = m ? +m[1] : 1; return n >= 1 && n <= 12 ? n : 1; };
+const normProblem = t => String(t || '').replace(/[\d+\-–—.,،/\\()]+/g, ' ').replace(/\s+/g, ' ').trim();
 function heatTable(rowsK, colsK, val, unit = '') {
   if (!rowsK.length || !colsK.length) return '<div class="empty">لا توجد بيانات</div>';
   let max = 0; for (const r of rowsK) for (const c of colsK) max = Math.max(max, val(r, c));
@@ -2584,7 +2592,8 @@ const Cars = {
       <div class="f"><label>المبلغ (د.ك) *</label><input type="number" min="0" step="0.001" inputmode="decimal" data-k="${p}.amount" value="${esc(st.amount)}"></div>
       ${sel(p + '.drv', st.drv, Data.drivers(editing && editing.did).map(x => [x.id, x.name]), { label: 'السائق *', all: '— اختر —' })}
       <div class="f"><label>التاريخ *</label><input type="date" data-k="${p}.date" value="${st.date || today()}" max="${today()}"></div>
-      <div class="f full"><label>المشكلة *</label><textarea rows="3" data-k="${p}.problem" placeholder="وصف العطل أو الإصلاح">${esc(st.problem)}</textarea></div>
+      <div class="f full"><label>المشكلة * <span class="mut" style="font-weight:400">— اختار من القائمة أو اكتب مشكلة جديدة</span></label><input list="cr-probs" data-k="${p}.problem" value="${esc(st.problem)}" placeholder="اكتب أول حرفين وهتطلعلك المشاكل اللي اتسجّلت قبل كده">
+        <datalist id="cr-probs">${[...new Set([...REPAIRS.map(r => r[0]), ...T.expenses.rows.map(x => String(x.problem || '').trim()).filter(Boolean)])].sort(abc).map(x => `<option value="${esc(x)}">`).join('')}</datalist></div>
     </div>`;
   },
   validate(st, isAdd) {
@@ -4697,7 +4706,7 @@ const Account = {
 const FIX_SECS = { diesel: 'تعبئة الديزل', cars: 'صيانة السيارات', deliveries: 'الأوردرات المسلّمة', goods: 'البضاعة المسلّمة', materials: 'صلاحية المواد الخام', performance: 'مؤشر الأداء القياسي', employees: 'تقييم موظفي المخزن' };
 const li = t => t.startsWith('ال') ? 'ل' + t.slice(1) : 'ل' + t;   // «للعربية 55224» / «لكل العربيات»
 const RULE_NAMES = { 'zero:ref': 'تعبئة بصفر لتر', 'big:ref': 'لترات كتير بشكل غريب', 'dup:ref': 'تعبئة متكررة', 'odo:err': 'قراءات العداد الغلط', 'odo:mis': 'بداية الشهر مختلفة عن نهاية اللي قبله',
-  'zero:exp': 'فاتورة بصفر', 'big:exp': 'مبلغ صيانة كبير بشكل غريب', 'dup:exp': 'رقم فاتورة متكرر', 'zero:dl': 'سند أوردرات بصفر', 'big:dl': 'عدد أوردرات كبير بشكل غريب', 'dup:dl': 'سند أوردرات متكرر',
+  'zero:exp': 'فاتورة بصفر', 'price:exp': 'سعر غريب لنفس المشكلة', 'drv:odd': 'السائق غريب على العربية', 'big:exp': 'مبلغ صيانة كبير بشكل غريب', 'dup:exp': 'رقم فاتورة متكرر', 'zero:dl': 'سند أوردرات بصفر', 'big:dl': 'عدد أوردرات كبير بشكل غريب', 'dup:dl': 'سند أوردرات متكرر',
   'zero:gd': 'سند بضاعة بصفر', 'dup:gd': 'سند بضاعة متكرر', 'exp:b': 'الانتهاء قبل الإنتاج', 'zero:b': 'دفعة بصفر', 'over:b': 'المسحوب أكبر من الدفعة', 'zero:i': 'تحويل بصفر',
   'zero:pf': 'جرد بصفر أصناف', 'err:pf': 'الأخطاء أكبر من الأصناف', future: 'تاريخ في المستقبل', old: 'تاريخ قديم جدًا' };
 // السند المكرر: نفس البيانات واتسجّل في نفس الوقت تقريبًا (لو اتسجّل في وقت مختلف غالبًا رحلة/تعبئة تانية حقيقية)
@@ -4743,6 +4752,23 @@ const Fixes = {
     };
     const vName = id => (Data.veh.get(id) || {}).number || '?', eName = id => (Data.emp.get(id) || {}).name || '?';
     const can = k => Data.level(k) >= 1;
+    // ---- السائق غريب على العربية: مين بيسوق كل عربية عادةً (من الأوردرات والتعبئات) في نفس الشهر والشهر اللي قبله واللي بعده ----
+    const VU = new Map(), use = (v, dr, dt) => { if (!v || !dr || !dt) return; const k = v + '|' + dt.slice(0, 7); let m = VU.get(k); if (!m) VU.set(k, m = new Map()); m.set(dr, (m.get(dr) || 0) + 1); };
+    if (T.deliveries.ready) T.deliveries.rows.forEach(r => use(r.vehicle_id, r.driver_id, r.date));
+    if (T.refuels.ready) T.refuels.rows.forEach(r => use(r.vehicle_id, r.driver_id, r.date));
+    const drvChk = (sec, r, what, go, no, self = true) => {
+      const v = r.vehicle_id, dr = r.driver_id; if (!v || !dr || !r.date) return;
+      const m0 = r.date.slice(0, 7), tot = new Map();
+      for (const m of [prevMonth(m0), m0, nextMonth(m0)]) for (const [k, n] of VU.get(v + '|' + m) || []) tot.set(k, (tot.get(k) || 0) + n);
+      if (self) tot.set(dr, (tot.get(dr) || 0) - 1);   // السند نفسه مايتحسبش
+      const all = [...tot.values()].reduce((a, n) => a + Math.max(0, n), 0), mine = Math.max(0, tot.get(dr) || 0);
+      if (all < 8 || mine > 0) return;
+      const [top, tn] = [...tot.entries()].sort((a, b) => b[1] - a[1])[0];
+      if (tn / all < 0.8) return;   // العربية مالهاش سواق ثابت (بيتبدّل عليها كذا سواق) فمش هنعلّم
+
+      push({ rc: 'drv:odd', ent: `p${v}-${dr}`, entL: `السائق ${eName(dr)} على العربية ${vName(v)}`, entsL: 'كل السواقين', sec, id: r.id, fp: `drv:odd:${sec}:${r.id}:${v}:${dr}`, no, date: r.date, what,
+        why: `السائق ${eName(dr)} مسقش العربية ${vName(v)} ولا مرة في الشهور دي، وسواقها الثابت ${eName(top)} (${fmt(Math.round(tn / all * 100))}% من شغلها). لو ده بديل في إجازة أو مرضية دوس «صح، تجاهل»؛ غير كده اتأكد إن اسم السائق صح`, fix: `غالبًا: ${eName(top)}`, warn: true, go, lv: 3 });
+    };
     // ---- الديزل ----
     if (can('diesel') && T.refuels.ready) {
       const R = T.refuels.rows, byV = new Map();
@@ -4757,6 +4783,7 @@ const Fixes = {
         const k = `${r.vehicle_id}|${r.date}|${l}`;
         const dr = dupOf(seen, k, r);
         if (dr !== null) push({ ...E, rc: 'dup:ref', sec: 'diesel', id: r.id, fp: `dup:ref:${r.id}:${k}`, no: '', date: r.date, what, why: 'تعبئة متكررة: نفس العربية ونفس اليوم ونفس اللترات' + dr, go, lv: 3 });
+        drvChk('diesel', r, what, go, '');
         dateChk('diesel', r.id, '', r.date, what, go);
       }
       if (T.odometer.ready) for (const vid of byV.keys()) for (const x of Diesel.issues(vid)) {
@@ -4769,7 +4796,8 @@ const Fixes = {
     if (can('cars') && T.expenses.ready) {
       const E = T.expenses.rows, byV = new Map(), nos = new Map();
       for (const r of E) { if (!byV.has(r.vehicle_id)) byV.set(r.vehicle_id, []); byV.get(r.vehicle_id).push(+r.amount || 0); }
-      const ME = medMap(byV);
+      const ME = medMap(byV), PG = new Map();
+      for (const r of E) { const k = repairOf(r.problem) || 'نص:' + normProblem(r.problem); if (!PG.has(k)) PG.set(k, []); PG.get(k).push({ id: r.id, u: (+r.amount || 0) / repairQty(r.problem) }); }
       for (const r of [...E].sort((a, b) => a.id - b.id)) {
         curBy = r.created_by || '';
         const a = +r.amount || 0, what = () => `${vName(r.vehicle_id)} — ${fmt(a, 1)} د.ك`, go = { fn: 'edit', args: ['cars', r.id] }, E = { ent: 'v' + r.vehicle_id, entL: () => `العربية ${vName(r.vehicle_id)}`, entsL: 'كل العربيات', val: a, unit: 'د.ك' };
@@ -4778,6 +4806,15 @@ const Fixes = {
         if (cnt >= 5 && a > md * 5 && a - md > 100) push({ ...E, rc: 'big:exp', sec: 'cars', id: r.id, fp: `big:exp:${r.id}:${a}`, no: r.invoice_no, date: r.date, what, why: `مبلغ كبير بشكل غريب: المعتاد للعربية دي حوالي ${fmt(md, 1)} د.ك`, warn: true, go, lv: 3 });
         const n = String(r.invoice_no || '').trim();
         if (n) { if (nos.has(n)) push({ ...E, rc: 'dup:exp', sec: 'cars', id: r.id, fp: `dup:exp:${r.id}:${n}`, no: n, date: r.date, what, why: 'رقم الفاتورة متكرر في فاتورة تانية', go, lv: 3 }); else nos.set(n, r.id); }
+        // سعر غريب لنفس المشكلة (مقارنة بفواتير نفس نوع الإصلاح)
+        const pk = repairOf(r.problem) || 'نص:' + normProblem(r.problem), grp = PG.get(pk) || [], q1 = repairQty(r.problem), unit = a / q1;
+        const others = grp.filter(g => g.id !== r.id && g.u > 0);
+        if (others.length >= 2 && a > 0) {
+          const mx = Math.max(...others.map(g => g.u)), mn = Math.min(...others.map(g => g.u)), name = pk.startsWith('نص:') ? String(r.problem).trim() : pk;
+          if (unit > mx * 2.5 && unit - mx >= 20) push({ ...E, val: unit, unit: 'د.ك', rc: 'price:exp', ent: 'p:' + pk, entL: `مشكلة «${name}»`, entsL: 'كل المشاكل', sec: 'cars', id: r.id, fp: `price:exp:${r.id}:${a}:${pk}`, no: r.invoice_no, date: r.date, what,
+            why: `سعر غريب لـ«${name}»: الفواتير اللي فاتت كانت من ${fmt(mn, 1)} لـ ${fmt(mx, 1)} د.ك${q1 > 1 ? ' للقطعة' : ''}، والفاتورة دي ${fmt(unit, 1)}${q1 > 1 ? ' للقطعة' : ''}`, fix: `المعتاد: من ${fmt(mn, 1)} لـ ${fmt(mx, 1)} د.ك`, warn: true, go, lv: 3 });
+        }
+        drvChk('cars', r, what, go, r.invoice_no, false);
         dateChk('cars', r.id, r.invoice_no, r.date, what, go);
       }
     }
@@ -4795,6 +4832,7 @@ const Fixes = {
         const k = [r.date, r.driver_id, r.vehicle_id, r.region_id, r.factory_id, r.warehouse_id, o].join('|');
         const dd = dupOf(seen, k, r);
         if (dd !== null) push({ ...E, rc: 'dup:dl', sec: 'deliveries', id: r.id, fp: `dup:dl:${r.id}:${k}`, no: r.record_no, date: r.date, what, why: 'سند متكرر: نفس اليوم والسائق والعربية والمنطقة والعدد' + dd, go, lv: 3 });
+        drvChk('deliveries', r, what, go, r.record_no);
         dateChk('deliveries', r.id, r.record_no, r.date, what, go);
       }
     }
