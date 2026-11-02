@@ -108,6 +108,7 @@ details.tools{margin-top:14px;border-top:1px dashed var(--line);padding-top:10px
 .pill{display:inline-block;padding:2px 10px;border-radius:20px;font-size:12.5px;font-weight:700;border:1px solid currentColor}
 td input{width:130px;padding:6px 8px}
 .rank{display:grid;grid-template-columns:22px 1fr auto;gap:8px;align-items:center;padding:7px 0;border-bottom:1px dashed var(--line);font-size:13.5px}
+.clk{cursor:pointer;border-radius:10px;transition:background .15s}.clk:hover{background:color-mix(in srgb,var(--accent) 9%,transparent)}.card.kpi.clk:hover,.err.clk:hover,.warnbox.clk:hover,.infobox.clk:hover{outline:2px solid color-mix(in srgb,var(--accent) 45%,transparent)}.clk .go{color:var(--accent);font-size:12px;font-weight:700;white-space:nowrap}
 .rank:last-child{border-bottom:0}.rank .i{color:var(--muted);font-weight:800}.rank small{display:block;color:var(--muted);font-size:12px}
 svg text{font-family:'IBM Plex Sans Arabic',sans-serif}
 .empty{color:var(--muted);text-align:center;padding:30px}
@@ -215,7 +216,7 @@ const DEFAULT_URL = 'https://masodssfbppadcfqkfcp.supabase.co';
 const DEFAULT_KEY = 'sb_publishable_nAjjVRgAlfwzg3MYDn7OGQ_RH5efYKP';   // المفتاح العام (publishable) — آمن للنشر
 const DOMAIN = 'qattami.app';                 // اسم الدخول amir ⇐ amir@qattami.app (أو إيميل حقيقي مربوط بالمستخدم)
 const OLD_APP = 'https://mangerstore-system.streamlit.app';
-const VERSION = 'web-5.7';
+const VERSION = 'web-5.8';
 const PAGE = 1000;                            // أقصى عدد صفوف يرجعه Supabase في الطلب الواحد
 const LS = {
   get(k, d = null) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
@@ -531,13 +532,13 @@ function barsSVG(labels, values, { color = 'var(--s1)', h = 220, unit = '', high
 function hbars(items, { color = 'var(--s1)', unit = '', dec = 0 } = {}) {
   if (!items.length) return '<div class="empty">لا توجد بيانات</div>';
   const max = Math.max(...items.map(x => Math.max(x[1] || 0, x[3] || 0)), 1);
-  return '<div class="bars">' + items.map(([k, v, col, mark]) => `<div class="hb" title="${esc(k)}: ${fmt(v, dec)} ${unit}"><span class="k">${esc(k)}</span>
+  return '<div class="bars">' + items.map(([k, v, col, mark, at]) => `<div class="hb${at ? ' clk' : ''}" ${at || ''} title="${esc(k)}: ${fmt(v, dec)} ${unit}"><span class="k">${esc(k)}</span>
     <span class="t" style="position:relative"><i style="width:${((v || 0) / max * 100).toFixed(1)}%;background:${col || color}"></i>${mark ? `<b class="mk" style="right:${(mark / max * 100).toFixed(1)}%" title="الطبيعي ${fmt(mark, dec)}"></b>` : ''}</span>
     <span class="n">${v === null || v === undefined ? '—' : fmt(v, dec)}</span></div>`).join('') + '</div>';
 }
 function ranks(items, dec = 0) {
   if (!items.length) return '<div class="empty">لا توجد بيانات</div>';
-  return items.map(([k, v, sub], i) => `<div class="rank"><span class="i">${i + 1}</span><span>${esc(k)}<small>${esc(sub || '')}</small></span><b dir="ltr">${fmt(v, dec)}</b></div>`).join('');
+  return items.map(([k, v, sub, at], i) => `<div class="rank${at ? ' clk' : ''}" ${at || ''}><span class="i">${i + 1}</span><span>${esc(k)}<small>${esc(sub || '')}</small></span><b dir="ltr">${fmt(v, dec)}</b></div>`).join('');
 }
 function gaugeSVG(pct, label, color) {
   const p = Math.max(0, Math.min(120, pct || 0)) / 120, r = 70, c = Math.PI * r, arc = 'M30 104 A70 70 0 0 1 170 104';
@@ -705,7 +706,8 @@ function cmpPeriod(st, allDates = []) {
   if (!keys.includes(st.p)) st.p = cur;
   const [f, tFull] = periodBounds(st.kind, st.p), partial = tFull > t0, t = partial ? t0 : tFull;
   const lyKey = lastYearKey(st.kind, st.p), [pf, ptFull] = periodBounds(st.kind, lyKey), pt = partial ? addDays(pf, daysBetween(f, t)) : ptFull;
-  return { kind: st.kind, key: st.p, keys, f, t, pf, pt: pt > ptFull ? ptFull : pt, partial, name: periodName(st.kind, st.p), lyName: periodName(st.kind, lyKey) };
+  CMP_ONE = String(st.n) === '1';
+  return { kind: st.kind, key: st.p, keys, f, t, pf, pt: pt > ptFull ? ptFull : pt, partial, single: CMP_ONE, name: periodName(st.kind, st.p), lyName: periodName(st.kind, lyKey) };
 }
 function periodPicker(path, st, c) {
   return sel(path + '.kind', st.kind, PKINDS, { label: 'النتائج' }) + sel(path + '.p', st.p, c.keys.map(k => [k, periodName(st.kind, k)]), { label: 'الفترة' })
@@ -713,7 +715,8 @@ function periodPicker(path, st, c) {
     + (+(st.n || 2) >= 2 ? sel(path + '.mode', st.mode || 'ly', CMPM, { label: 'نقارن بـ' }) : '');
 }
 // ---------------- مقارنة أكتر من فترة (2 لـ 5): نفس الفترة في السنين اللي فاتت، أو الفترات اللي قبلها على طول ----------------
-const CMP_MAX = 12, CMPN = Array.from({ length: CMP_MAX - 1 }, (_, i) => [String(i + 2), i ? `${i + 2} فترات` : 'فترتين']);
+const CMP_MAX = 12, CMPN = [['1', 'فترة واحدة (من غير مقارنة)'], ...Array.from({ length: CMP_MAX - 1 }, (_, i) => [String(i + 2), i ? `${i + 2} فترات` : 'فترتين'])];
+let CMP_ONE = false;   // «فترة واحدة»: اللوحة من غير أي مقارنة بالعام الماضي (بيتصفّر مع كل رسم للصفحة)
 const CMPM = [['ly', 'نفس الفترة في السنين اللي فاتت'], ['prev', 'الفترات اللي قبلها على طول']];
 const prevKey = (kind, key) => periodKey(kind, addDays(periodBounds(kind, key)[0], -1));
 function cmpPeriods(c, st) {
@@ -731,7 +734,7 @@ function cmpPeriods(c, st) {
 }
 // spec: { rows, date?, metrics: [{ l, v: rows => رقم, dec, unit, good: true/false }], by?: { l, k: r => الاسم, v: r => رقم, dec } }
 function multiCmp(c, st, spec) {
-  if (+(st.n || 2) < 3 && st.mode !== 'prev') return '';   // فترتين بنفس الفترة من العام الماضي = اللوحة العادية
+  if (+(st.n || 2) < 2 || (+(st.n || 2) < 3 && st.mode !== 'prev')) return '';   // فترتين بنفس الفترة من العام الماضي = اللوحة العادية
   const P = cmpPeriods(c, st), dt = spec.date || (r => r.date), cols = P.list.map(p => spec.rows.filter(r => { const d = dt(r); return d && d >= p.f && d <= p.t; }));
   const ch = (a, b, good) => { if (!b) return ''; const x = (a / b - 1) * 100, g = Math.abs(x) < 0.05 ? null : (x > 0) === good;
     return `<div style="font-size:12px" class="${g === null ? 'mut' : g ? 'up' : 'down'}">${x > 0 ? '▲' : x < 0 ? '▼' : '='} <span dir="ltr">${fmt(Math.abs(x), 1)}%</span></div>`; };
@@ -752,10 +755,11 @@ function multiCmp(c, st, spec) {
 }
 function cmpHead(c, extra = '') {
   return `<div class="period"><span class="box">📅 <b>الفترة المعروضة:</b> ${c.partial ? spanText(c.f, c.t) : c.name}</span>
-    <span class="box">⇄ <b>تُقارن بـ:</b> ${c.partial ? `نفس الأيام من العام الماضي: ${spanText(c.pf, c.pt)}` : c.lyName}</span>${extra}</div>`;
+    ${c.single ? '' : `<span class="box">⇄ <b>تُقارن بـ:</b> ${c.partial ? `نفس الأيام من العام الماضي: ${spanText(c.pf, c.pt)}` : c.lyName}</span>`}${extra}</div>`;
 }
 // نص التغيّر عن العام الماضي؛ higherGood: هل الزيادة جيدة؟
 function vsLY(cur, prev, { higherGood = true, dec = 0, unit = '', points = false } = {}) {
+  if (CMP_ONE) return '';
   if (prev === null || prev === undefined || (!points && !prev)) return '<span class="mut">لا توجد بيانات في نفس الفترة من العام الماضي</span>';
   const ch = points ? cur - prev : (cur / prev - 1) * 100, good = Math.abs(ch) < 0.05 ? null : (ch > 0) === higherGood;
   return `<span class="${good === null ? 'mut' : good ? 'up' : 'down'}">${ch > 0 ? '▲' : ch < 0 ? '▼' : '='} <span dir="ltr">${fmt(Math.abs(ch), 1)}${points ? '' : '%'}</span>${points ? ' نقطة' : ''} عن العام الماضي (${fmt(prev, dec)}${unit})</span>`;
@@ -2752,6 +2756,7 @@ const Cars = {
     rep: { preset: 'year', f: '', t: '', veh: '', type: '', drv: '' },
     add: { inv: '', veh: '', drv: '', date: '', amount: '', problem: '' },
     edit: {},
+    det: null,   // صفحة التفاصيل: { k: 'veh' | 'drv' | 'fault' | 'type', v, f, t, per: 'p' | 'all' }
   },
   quiet(grp) { return grp === 'add' || grp === 'edit'; },
   rows() {
@@ -2784,6 +2789,7 @@ const Cars = {
     const lv = Data.level('cars');
     if (lv < 1) return `<div class="err">ليست لديك صلاحية على قسم صيانة السيارات. اطلبها من المدير.</div>`;
     const tabs = [['dash', 'لوحة المعلومات'], ['list', 'الفواتير'], ...(lv >= 2 ? [['add', 'إضافة فاتورة']] : []), ['rep', 'التقارير']];
+    if (this.st.tab === 'det' && this.st.det) return tabsBar(tabs, 'dash', 'cr') + this.det();
     if (!tabs.some(t => t[0] === this.st.tab)) this.st.tab = 'dash';
     return tabsBar(tabs, this.st.tab, 'cr') + this[this.st.tab]();
   },
@@ -2802,18 +2808,21 @@ const Cars = {
     const mKeys = lastMonths(12, t.slice(0, 7)), monthly = groupSum(all.filter(r => r.ym >= mKeys[0] && r.ym <= mKeys[11]), r => r.ym, A);
     const peak = sortDesc(monthly)[0] || [t.slice(0, 7), 0], nMonths = new Set(d.map(r => r.ym)).size;
     const byCar = sortDesc(groupSum(d, r => r.v, A)), carInfo = new Map(d.map(r => [r.v, r]));
-    const byDrv = sortDesc(groupSum(d, r => r.d, A)), drvN = groupSum(d, r => r.d, () => 1);
+    const byDrv = sortDesc(groupSum(d, r => r.d, A)), drvN = groupSum(d, r => r.d, () => 1), drvInfo = new Map(d.map(r => [r.d, r]));
+    // كل حاجة في اللوحة بتتداس وتفتح صفحة تفاصيلها (في نفس الفترة)
+    const go = (k, v) => `data-act="cr-det" data-k="${k}" data-v="${esc(String(v))}" data-f="${f}" data-t="${t}" title="اضغط لعرض التفاصيل"`;
+    const gV = name => go('veh', carInfo.get(name).vid), gD = name => go('drv', drvInfo.get(name).did);
     const byType = sortDesc(groupSum(d, r => r.vt || '—', A)), faults = sortDesc(groupSum(d, r => r.fault, () => 1));
     const activeCars = [...Data.veh.values()].filter(v => v.active).length, served = new Set(d.map(r => r.vid)).size;
     const topCars = byCar.slice(0, 6).map(x => x[0]), topDrv = byDrv.slice(0, 6).map(x => x[0]);
     const pair = new Map(); for (const r of d) { const k = r.d + '|' + r.v; pair.set(k, (pair.get(k) || 0) + r.a); }
     // تنبيهات
     const al = [], avgCar = total / byCar.length;
-    for (const [c, a] of byCar.filter(x => x[1] > avgCar * 1.5).slice(0, 2)) al.push(['bad', `السيارة <b>${esc(c)}</b> (طراز ${esc(carInfo.get(c).vm)}) أنفقت ${KWD(a)} د.ك، أي ${fmt(a / avgCar, 1)} ضعف متوسط السيارة. قد تحتاج إلى قرار استبدال.`]);
+    for (const [c, a] of byCar.filter(x => x[1] > avgCar * 1.5).slice(0, 2)) al.push(['bad', gV(c), `السيارة <b>${esc(c)}</b> (طراز ${esc(carInfo.get(c).vm)}) أنفقت ${KWD(a)} د.ك، أي ${fmt(a / avgCar, 1)} ضعف متوسط السيارة. قد تحتاج إلى قرار استبدال.`]);
     const avgDrv = total / byDrv.length;
-    if (byDrv.length > 1 && byDrv[0][1] > avgDrv * 1.5) { const dn = byDrv[0][0], fav = sortDesc(groupSum(d.filter(r => r.d === dn), r => r.v, A)); al.push(['warn', `السائق <b>${esc(dn)}</b> هو الأعلى إنفاقًا، و${fmt(fav[0][1] / byDrv[0][1] * 100)}% من مصروفاته على السيارة ${esc(fav[0][0])}.`]); }
+    if (byDrv.length > 1 && byDrv[0][1] > avgDrv * 1.5) { const dn = byDrv[0][0], fav = sortDesc(groupSum(d.filter(r => r.d === dn), r => r.v, A)); al.push(['warn', gD(dn), `السائق <b>${esc(dn)}</b> هو الأعلى إنفاقًا، و${fmt(fav[0][1] / byDrv[0][1] * 100)}% من مصروفاته على السيارة ${esc(fav[0][0])}.`]); }
     const topF = faults.find(x => x[0] !== 'أخرى');
-    if (topF && topF[1] / n >= 0.25) al.push(['info', `«${esc(topF[0])}» هو العطل الأكثر تكرارًا (${fmt(topF[1] / n * 100)}% من الفواتير). قد يقلل عقد صيانة سنوي التكلفة.`]);
+    if (topF && topF[1] / n >= 0.25) al.push(['info', go('fault', topF[0]), `«${esc(topF[0])}» هو العطل الأكثر تكرارًا (${fmt(topF[1] / n * 100)}% من الفواتير). قد يقلل عقد صيانة سنوي التكلفة.`]);
     const chg = vsLY(total, prev.length ? ptot : null, { higherGood: false, dec: 3 });
     return head + `<div class="grid g12">
       <div class="card hero s12"><h2>مصروفات الصيانة في ${c.name}: <bdi>${KWD(total)}</bdi> د.ك</h2>
@@ -2822,19 +2831,64 @@ const Cars = {
       <div class="s12 grid g4">
         ${kpi('إجمالي المصروفات', KWD(total) + ' <small>د.ك</small>', chg)}
         ${kpi('عدد الفواتير', fmt(n), prev.length ? vsLY(n, prev.length, { higherGood: false }) : `<span class="mut">بمتوسط ${fmt(n / Math.max(1, nMonths))} فاتورة شهريًا</span>`)}
-        ${kpi('أعلى سيارة إنفاقًا', esc(byCar[0][0]), `<span class="mut">${fmt(byCar[0][1], 1)} د.ك، ${fmt(byCar[0][1] / total * 100)}% من الإجمالي</span>`)}
+        ${kpi('أعلى سيارة إنفاقًا', esc(byCar[0][0]), `<span class="mut">${fmt(byCar[0][1], 1)} د.ك، ${fmt(byCar[0][1] / total * 100)}% من الإجمالي</span> <span class="go">التفاصيل ←</span>`).replace('<div class="card kpi"', `<div class="card kpi clk" ${gV(byCar[0][0])}`)}
         ${kpi('متوسط الفاتورة', fmt(total / n, 1) + ' <small>د.ك</small>', `<span class="mut">أعلى شهر ${monthLabel(peak[0])}: ${fmt(peak[1], 1)}</span>`)}
       </div>
       ${card('المصروفات شهريًا', 'آخر 12 شهرًا حتى نهاية الفترة، بالدينار الكويتي', barsSVG(mKeys.map(mshort), mKeys.map(k => Math.round((monthly.get(k) || 0) * 10) / 10), { color: 'var(--s1)', dec: 1, unit: 'د.ك', highlight: 11 }), 's8')}
-      ${card('حسب نوع المركبة', 'نسبة كل نوع من الإجمالي', hbars(byType.map(([k, v]) => [k, Math.round(v * 10) / 10]), { color: 'var(--s2)', dec: 1 }), 's4')}
-      ${card('أعلى 5 سيارات إنفاقًا', 'إجمالي الفواتير بالدينار', ranks(byCar.slice(0, 5).map(([k, v]) => [k, v, `${carInfo.get(k).vt} ${carInfo.get(k).vm}`]), 1), 's4')}
-      ${card('أعلى 5 سائقين إنفاقًا', 'فواتير المركبات التي قادوها', ranks(byDrv.slice(0, 5).map(([k, v]) => [k, v, `${drvN.get(k)} فاتورة`]), 1), 's4')}
-      ${card('أكثر الأعطال تكرارًا', 'عدد الفواتير لكل نوع عطل (من وصف المشكلة)', hbars(faults, { color: 'var(--s3)', unit: 'فاتورة' }), 's4')}
+      ${card('حسب نوع المركبة', 'نسبة كل نوع من الإجمالي — اضغط للتفاصيل', hbars(byType.map(([k, v]) => [k, Math.round(v * 10) / 10, null, null, go('type', k)]), { color: 'var(--s2)', dec: 1 }), 's4')}
+      ${card('أعلى 5 سيارات إنفاقًا', 'إجمالي الفواتير بالدينار — اضغط على أي سيارة لتفاصيلها', ranks(byCar.slice(0, 5).map(([k, v]) => [k, v, `${carInfo.get(k).vt} ${carInfo.get(k).vm}`, gV(k)]), 1), 's4')}
+      ${card('أعلى 5 سائقين إنفاقًا', 'فواتير المركبات التي قادوها — اضغط على أي سائق لتفاصيله', ranks(byDrv.slice(0, 5).map(([k, v]) => [k, v, `${drvN.get(k)} فاتورة`, gD(k)]), 1), 's4')}
+      ${card('أكثر الأعطال تكرارًا', 'عدد الفواتير لكل نوع عطل — اضغط على العطل تشوف كل مرة حصل وتكلفته', hbars(faults.map(([k, v]) => [k, v, null, null, go('fault', k)]), { color: 'var(--s3)', unit: 'فاتورة' }), 's4')}
       ${card('السائق × السيارة', 'كلما كان اللون أشد زادت المصروفات؛ يكشف مدى محافظة كل سائق على المركبة', heatTable(topDrv, topCars, (r, c) => pair.get(r + '|' + c) || 0, 'د.ك'), 's7')}
-      ${card('تنبيهات وتوصيات', 'مستخرجة تلقائيًا من البيانات', al.length ? al.map(([k, m]) => `<div class="${k === 'bad' ? 'err' : k === 'warn' ? 'warnbox' : 'infobox'}">${m}</div>`).join('') : '<div class="ok">لا توجد ملاحظات؛ المصروفات ضمن المعدل الطبيعي.</div>', 's5')}
+      ${card('تنبيهات وتوصيات', 'مستخرجة تلقائيًا من البيانات — اضغط على أي تنبيه لتفاصيله', al.length ? al.map(([k, at, m]) => `<div class="${k === 'bad' ? 'err' : k === 'warn' ? 'warnbox' : 'infobox'} clk" ${at}>${m} <span class="go">التفاصيل ←</span></div>`).join('') : '<div class="ok">لا توجد ملاحظات؛ المصروفات ضمن المعدل الطبيعي.</div>', 's5')}
       ${card('آخر الفواتير', 'آخر 8 فواتير في الفترة', table(['رقم الفاتورة', 'التاريخ', 'السيارة', 'النوع', 'السائق', 'المشكلة', 'المبلغ (د.ك)'],
         d.slice(0, 8).map(r => [esc(r.no), r.date, esc(r.v), esc(r.vt), esc(r.d), `<span title="${esc(r.p)}">${esc(r.p.length > 60 ? r.p.slice(0, 60) + '…' : r.p)}</span>`, KWD(r.a)]), { num: [6] }), 's12')}
     </div>`;
+  },
+
+  // ---------------- صفحة التفاصيل: سيارة / سائق / عطل / نوع مركبة ----------------
+  openDet(k, v, f, t) { this.st.det = { k, v: String(v), f, t, per: 'p' }; this.st.tab = 'det'; App.render(); window.scrollTo(0, 0); },
+  det() {
+    const D = this.st.det, lv = Data.level('cars'), all = this.rows();
+    const V = Data.veh.get(+D.v) || {}, E = Data.emp.get(+D.v) || {};
+    const match = D.k === 'veh' ? r => String(r.vid) === D.v : D.k === 'drv' ? r => String(r.did) === D.v : D.k === 'fault' ? r => r.fault === D.v : r => (r.vt || '—') === D.v;
+    const head = { veh: ['🚗', `السيارة ${V.number || D.v}`, [V.type, V.model ? 'طراز ' + V.model : ''].filter(Boolean).join(' — ')], drv: ['👤', `السائق ${E.name || D.v}`, 'فواتير صيانة المركبات اللي كان سايقها'],
+      fault: ['🔧', `عطل «${D.v}»`, 'كل مرة حصل فيها العطل ده، في أنهي عربية، وتكلفته كانت كام'], type: ['🚛', `نوع المركبة: ${D.v}`, 'كل فواتير المركبات من النوع ده'] }[D.k];
+    const mine = all.filter(match), [f, t] = D.per === 'all' ? ['0000-01-01', '9999-12-31'] : [D.f, D.t];
+    const d = mine.filter(r => r.date >= f && r.date <= t), fleet = all.filter(r => r.date >= f && r.date <= t).reduce((s, r) => s + r.a, 0);
+    const back = `<div class="period" style="justify-content:space-between"><button class="btn ghost sm" data-act="cr-det-back">→ رجوع للوحة المعلومات</button>
+      <span>${sel('cr.det.per', D.per, [['p', `الفترة: ${spanText(D.f, D.t)}`], ['all', 'كل الوقت']], { label: '' })}</span></div>`;
+    const top = `<div class="card hero" style="margin-bottom:14px"><h2>${head[0]} ${esc(head[1])}</h2><p>${esc(head[2])}</p></div>`;
+    if (!d.length) return back + top + `<div class="empty">مفيش فواتير ${D.per === 'all' ? '' : 'في الفترة دي — جرّب «كل الوقت»'}</div>`;
+    const A = r => r.a, tot = d.reduce((s, r) => s + r.a, 0), n = d.length, last = d[0];
+    const byV = sortDesc(groupSum(d, r => r.vid, A)), byDr = sortDesc(groupSum(d, r => r.did, A)), byF = sortDesc(groupSum(d, r => r.fault, A));
+    const cnt = (key, k) => d.filter(r => key(r) === k).length;
+    const go = (k, v) => `data-act="cr-det" data-k="${k}" data-v="${esc(String(v))}" data-f="${D.f}" data-t="${D.t}" title="اضغط لعرض التفاصيل"`;
+    const vN = id => (Data.veh.get(id) || {}).number || '?', dN = id => (Data.emp.get(id) || {}).name || '?';
+    const mKeys = lastMonths(12, (D.per === 'all' ? today() : t).slice(0, 7)), monthly = groupSum(mine.filter(r => r.ym >= mKeys[0] && r.ym <= mKeys[11]), r => r.ym, A);
+    // نوع الإصلاح بالتفصيل: كام مرة وأقل/متوسط/أعلى سعر
+    const rep = new Map(); for (const r of d) { const k = repairOf(r.p) || 'أخرى'; const x = rep.get(k) || { n: 0, a: 0, mn: Infinity, mx: 0 }; x.n++; x.a += r.a; x.mn = Math.min(x.mn, r.a); x.mx = Math.max(x.mx, r.a); rep.set(k, x); }
+    const repRows = [...rep.entries()].sort((a, b) => b[1].a - a[1].a);
+    const days = Math.round((Date.parse(today()) - Date.parse(last.date)) / 864e5);
+    const kp = `<div class="grid g4" style="margin-bottom:14px">${kpi('إجمالي المصروفات', KWD(tot) + ' <small>د.ك</small>', fleet ? `<span class="mut">${fmt(tot / fleet * 100, 1)}% من مصروفات كل العربيات</span>` : '')}
+      ${kpi('عدد الفواتير', fmt(n), `<span class="mut">متوسط الفاتورة ${fmt(tot / n, 1)} د.ك</span>`)}
+      ${D.k === 'veh' ? kpi('السائقين', fmt(byDr.length), `<span class="mut">أكتر واحد: ${esc(dN(byDr[0][0]))}</span>`) : kpi('العربيات', fmt(byV.length), `<span class="mut">أكتر واحدة: ${esc(vN(byV[0][0]))}</span>`)}
+      ${kpi('آخر فاتورة', last.date, `<span class="mut">من ${fmt(days)} يوم — ${KWD(last.a)} د.ك</span>`)}</div>`;
+    const cards = [];
+    cards.push(card('المصروفات شهريًا', 'آخر 12 شهرًا', barsSVG(mKeys.map(mshort), mKeys.map(k => Math.round((monthly.get(k) || 0) * 10) / 10), { color: 'var(--s1)', dec: 1, unit: 'د.ك', highlight: 11 }), 's8'));
+    if (D.k !== 'fault') cards.push(card('حسب نوع العطل', 'اضغط على العطل تشوف تفاصيله', hbars(byF.map(([k, v]) => [`${k} (${cnt(r => r.fault, k)})`, Math.round(v * 10) / 10, null, null, go('fault', k)]), { color: 'var(--s3)', dec: 1 }), 's4'));
+    if (D.k === 'fault') cards.push(card('العطل ده في كل عربية', 'كام مرة وتكلفته في كل عربية — اضغط على العربية', table(['العربية', 'المرات', 'الإجمالي', 'آخر مرة'],
+      byV.map(([k, v]) => { const rs = d.filter(r => r.vid === k); return [`<span class="clk" ${go('veh', k)}><b>${esc(vN(k))}</b></span>`, fmt(rs.length), KWD(v), rs[0].date]; }), { num: [1, 2], max: 420 }), 's4'));
+    if (D.k !== 'veh' && D.k !== 'fault') cards.push(card('حسب العربية', 'اضغط على العربية لتفاصيلها', ranks(byV.slice(0, 10).map(([k, v]) => [vN(k), v, `${cnt(r => r.vid, k)} فاتورة · ${(Data.veh.get(k) || {}).type || ''}`, go('veh', k)]), 1), 's4'));
+    if (D.k !== 'drv') cards.push(card('حسب السائق', 'اضغط على السائق لتفاصيله', ranks(byDr.slice(0, 10).map(([k, v]) => [dN(k), v, `${cnt(r => r.did, k)} فاتورة`, go('drv', k)]), 1), 's4'));
+    cards.push(card('نوع الإصلاح وأسعاره', 'كام مرة اتعمل، وأقل وأعلى سعر اتدفع', table(['الإصلاح', 'المرات', 'الإجمالي', 'المتوسط', 'أقل سعر', 'أعلى سعر'],
+      repRows.map(([k, x]) => [esc(k), fmt(x.n), KWD(x.a), KWD(x.a / x.n), KWD(x.mn), KWD(x.mx)]), { num: [1, 2, 3, 4, 5], max: 420 }), D.k === 'type' ? 's12' : 's8'));
+    const inv = card(`كل الفواتير (${fmt(n)})`, D.k === 'fault' ? 'كل مرة حصل فيها العطل وتكلفته — مرتبة من الأحدث' : 'مرتبة من الأحدث', `<div style="margin:-4px 0 10px"><button class="btn ghost sm" data-act="cr-det-csv">⬇️ تنزيل Excel (CSV)</button></div>`
+      + table(['رقم الفاتورة', 'التاريخ', 'السيارة', 'السائق', 'نوع العطل', 'المشكلة', 'المبلغ (د.ك)', ...(lv >= 3 ? [''] : [])],
+        d.map(r => [esc(r.no), r.date, `<span class="clk" ${go('veh', r.vid)}>${esc(r.v)}</span>`, `<span class="clk" ${go('drv', r.did)}>${esc(r.d)}</span>`, esc(r.fault), `<span style="white-space:normal">${esc(r.p)}</span>`, `<b>${KWD(r.a)}</b>`,
+          ...(lv >= 3 ? [`<button class="btn ghost sm" data-act="cr-edit" data-id="${r.id}">تعديل</button>`] : [])]), { num: [6], max: 900 }), 's12');
+    this._detRows = d;
+    return back + top + kp + `<div class="grid g12">${cards.join('')}${inv}</div>`;
   },
 
   // ---------------- الفواتير ----------------
@@ -2960,6 +3014,9 @@ const Cars = {
     'edit': (t) => Cars.openEdit(+t.dataset.id), 'del': (t) => Cars.confirmDel(+t.dataset.id), 'do-del': (t) => Cars.doDel(+t.dataset.id, t),
     'pg': (t) => { Cars.st.list.page += +t.dataset.d; App.render(); },
     'export-list': () => Cars.exportRows(Cars.filter(Cars.st.list)[0], `maintenance_${today()}.csv`),
+    'det': (t) => Cars.openDet(t.dataset.k, t.dataset.v, t.dataset.f, t.dataset.t),
+    'det-back': () => { Cars.st.tab = 'dash'; Cars.st.det = null; App.render(); },
+    'det-csv': () => { const D = Cars.st.det; if (Cars._detRows) Cars.exportRows(Cars._detRows, `maintenance_${D.k}_${D.v}_${today()}.csv`); },
     'export-rep': () => { const R = Cars._rep; if (R) Cars.exportRows(R.d, `maintenance_report_${R.f}_${R.t}.csv`); },
   },
 };
@@ -5500,7 +5557,7 @@ const App = {
   navMark() { $$('[data-nav]').forEach(b => b.classList.toggle('on', b.dataset.nav === this.page)); },
   render() {
     const p = $('#page'); if (!p) return;
-    const y = window.scrollY; p.innerHTML = PAGES[this.page].render(); window.scrollTo(0, y); clearTimeout(this._fb); this._fb = setTimeout(() => this.fixBadge(), 400);
+    const y = window.scrollY; CMP_ONE = false; p.innerHTML = PAGES[this.page].render(); window.scrollTo(0, y); clearTimeout(this._fb); this._fb = setTimeout(() => this.fixBadge(), 400);
     if (this.page === 'admin' && Admin.st.tab === 'backup') Admin.dirInfo();
   },
 };
