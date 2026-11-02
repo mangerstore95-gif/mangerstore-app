@@ -215,7 +215,7 @@ const DEFAULT_URL = 'https://masodssfbppadcfqkfcp.supabase.co';
 const DEFAULT_KEY = 'sb_publishable_nAjjVRgAlfwzg3MYDn7OGQ_RH5efYKP';   // المفتاح العام (publishable) — آمن للنشر
 const DOMAIN = 'qattami.app';                 // اسم الدخول amir ⇐ amir@qattami.app (أو إيميل حقيقي مربوط بالمستخدم)
 const OLD_APP = 'https://mangerstore-system.streamlit.app';
-const VERSION = 'web-5.5';
+const VERSION = 'web-5.6';
 const PAGE = 1000;                            // أقصى عدد صفوف يرجعه Supabase في الطلب الواحد
 const LS = {
   get(k, d = null) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
@@ -1809,6 +1809,80 @@ const ExcelApp = {
   },
 };
 // ============================================================================
+// أسماء العملاء: نعرف إن اسمين هما نفس العميل حتى لو اتكتبوا بشكل مختلف
+// - مسافة زيادة، «ال»، ة/ه، ى/ي، همزات، تشكيل، حروف متكررة (adoor = ador)
+// - عربي وإنجليزي لنفس الاسم (3bees = 3بيس) عن طريق «هيكل الحروف الساكنة»
+// - غلطة في حرف واحد (ابوداود / ابوداوود)
+// ============================================================================
+const CM = {
+  norm(s) {
+    let x = String(s || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯٓ-ًٕ-ْٰـ]/g, '')
+      .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/[أإآٱ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/ؤ/g, 'و').replace(/ئ/g, 'ي').replace(/ء/g, '');
+    x = x.replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean).map(w => w.replace(/^ال(?=..)/, '')).filter(w => w !== 'the').join('');
+    return x.replace(/([a-z])\1+/g, '$1').replace(/يي$/, 'ي');
+  },
+  _cls: (() => { const m = {}; for (const [k, v] of Object.entries({ B: 'بbp', T: 'تطtث', J: 'جjgقq', K: 'كkcخ', D: 'دضd', Z: 'ذزظz', R: 'رr', S: 'سصsx', X: 'ش', F: 'فfv', L: 'لl', M: 'مm', N: 'نn', H: 'هحh', G: 'عغ' })) for (const c of v) m[c] = k; return m; })(),
+  // الحروف الساكنة بس (من غير حروف العلة) علشان نقارن العربي بالإنجليزي
+  skel(s) {
+    let x = this.norm(s); for (const [a, b] of [['sh', 'ش'], ['th', 'ث'], ['kh', 'خ'], ['gh', 'غ'], ['ch', 'ش'], ['ph', 'ف']]) x = x.split(a).join(b);
+    let o = ''; for (const c of x) o += /\d/.test(c) ? c : (this._cls[c] || '');
+    return o.replace(/(.)\1+/g, '$1').replace(/H$/, '');
+  },
+  lev(a, b, m) {
+    if (Math.abs(a.length - b.length) > m) return m + 1;
+    let p = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      const c = [i]; let lo = i;
+      for (let j = 1; j <= b.length; j++) { c[j] = Math.min(p[j] + 1, c[j - 1] + 1, p[j - 1] + (a[i - 1] !== b[j - 1] ? 1 : 0)); if (c[j] < lo) lo = c[j]; }
+      if (lo > m) return m + 1; p = c;
+    }
+    return p[b.length];
+  },
+  latin: n => /[a-z]/.test(n) && !/[؀-ۿ]/.test(n),
+  // نفس العميل أكيد؟ ('same') — غالبًا عربي/إنجليزي ('trans') — قريبين جدًا ('typo') — لأ (null)
+  how(a, b) {
+    const na = this.norm(a), nb = this.norm(b); if (!na || !nb) return null;
+    if (na === nb) return 'same';
+    if (this.latin(na) !== this.latin(nb)) { const sa = this.skel(a); return sa.length >= 3 && sa === this.skel(b) ? 'trans' : null; }
+    const L = Math.min(na.length, nb.length);
+    if (L >= 5 && this.lev(na, nb, 1) <= 1) return 'typo';
+    if (L >= 9 && this.lev(na, nb, 2) <= 2) return 'typo';
+    return null;
+  },
+  // اقتراحات لاسم بيتكتب دلوقتي (قبل ما يتضاف كعميل جديد)
+  near(q, names, max = 5) {
+    const nq = this.norm(q), sq = this.skel(q), lq = this.latin(nq); if (nq.length < 3) return [];
+    const out = [];
+    for (const n of names) {
+      const nn = this.norm(n); if (nn === nq || nn.includes(nq)) continue;   // دول ظاهرين في نتايج البحث العادية
+      let ok = false;
+      if (this.latin(nn) !== lq) ok = sq.length >= 3 && this.skel(n) === sq;
+      else ok = this.lev(nq, nn, nq.length >= 8 ? 2 : 1) <= (nq.length >= 8 ? 2 : 1) && Math.min(nq.length, nn.length) >= 4;
+      if (ok) { out.push(n); if (out.length >= max) break; }
+    }
+    return out;
+  },
+  // كل الأسماء المتشابهة: [{ names, kind, keep }] — cnt = كام سند لكل اسم
+  groups(names, cnt = new Map()) {
+    const byN = new Map();
+    for (const n of names) { const k = this.norm(n); if (!k) continue; if (!byN.has(k)) byN.set(k, []); byN.get(k).push(n); }
+    const keys = [...byN.keys()], S = new Map(keys.map(k => [k, this.skel(byN.get(k)[0])])), out = [];
+    const best = ns => [...ns].sort((a, b) => (cnt.get(b) || 0) - (cnt.get(a) || 0) || (this.latin(this.norm(a)) ? 1 : 0) - (this.latin(this.norm(b)) ? 1 : 0) || b.length - a.length || abc(a, b))[0];
+    for (const k of keys) { const ns = byN.get(k); if (ns.length > 1) out.push({ names: ns, kind: 'same', keep: best(ns) }); }
+    const byLen = [...keys].sort((a, b) => a.length - b.length);
+    for (let i = 0; i < byLen.length; i++) {
+      const a = byLen[i], la = this.latin(a);
+      for (let j = i + 1; j < byLen.length; j++) {
+        const b = byLen[j]; let kind = null;
+        if (this.latin(b) !== la) { if (S.get(a).length >= 3 && S.get(a) === S.get(b)) kind = 'trans'; }
+        else { if (b.length - a.length > 2) continue; if (a.length >= 5 && this.lev(a, b, a.length >= 9 ? 2 : 1) <= (a.length >= 9 ? 2 : 1)) kind = 'typo'; }
+        if (kind) { const ns = [...byN.get(a), ...byN.get(b)]; out.push({ names: ns, kind, keep: best(ns) }); }
+      }
+    }
+    return out;
+  },
+};
+// ============================================================================
 // قسم الأوردرات المسلّمة
 // ============================================================================
 const Deliveries = {
@@ -1954,15 +2028,18 @@ const Deliveries = {
   },
   custInner(grp, st, q = '', open = false) {
     const ch = this.chosen(st), nq = q.trim(), all = this.customers().filter(c => !ch.includes(c));
-    const norm = x => x.replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/\s+/g, '');
-    const hits = nq ? all.filter(c => norm(c).includes(norm(nq))) : all, show = hits.slice(0, 300);
-    const exact = nq && this.customers().some(c => norm(c) === norm(nq));
+    // البحث بيتجاهل المسافات و«ال» و ة/ه و ى/ي والهمزات، فـ«ابراهيم يحيى» تلاقي «ابراهيم اليحيي»
+    const nn = CM.norm(nq), raw = nq.toLowerCase();
+    const hits = nq ? all.filter(c => CM.norm(c).includes(nn) || c.toLowerCase().includes(raw)) : all, show = hits.slice(0, 300);
+    const exact = nq && this.customers().some(c => CM.norm(c) === nn);
+    const near = nq && !exact ? CM.near(nq, all.filter(c => !hits.includes(c))) : [];
     return `${ch.length ? `<div class="chips" style="margin:2px 0 6px">${ch.map(c => `<span class="chip" style="display:inline-flex;gap:6px;align-items:center">${esc(c)}<button class="btn ghost sm" style="padding:0 6px;min-height:0" data-cp-rm="${grp}" data-c="${esc(c)}" title="شيل">✕</button></span>`).join('')}</div>` : ''}
       <div style="position:relative"><input class="cp-q" data-cp="${grp}" value="${esc(q)}" autocomplete="off" style="width:100%;padding-left:34px" placeholder="${ch.length ? '➕ عميل تاني لنفس الرحلة (اختياري)…' : '— اختار العميل — (دوس هنا أو اكتب أول حروف الاسم)'}">
         <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);pointer-events:none;color:var(--muted)">▾</span>
       ${open ? `<div class="cp-list" style="position:absolute;z-index:30;inset-inline:0;top:100%;max-height:300px;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 30px rgba(0,0,0,.18);margin-top:4px">
-        ${nq && !exact ? `<div class="cp-it" data-cp-new="${grp}" data-c="${esc(nq)}" style="padding:9px 12px;cursor:pointer;font-weight:700;color:var(--accent)">➕ إضافة «${esc(nq)}» كعميل جديد</div>` : ''}
-        ${show.map(c => `<div class="cp-it" data-cp-pick="${grp}" data-c="${esc(c)}" style="padding:8px 12px;cursor:pointer;border-top:1px solid var(--line)">${esc(c)}</div>`).join('') || (nq ? '' : '<div class="mut" style="padding:10px">مفيش عملاء</div>')}
+        ${show.map((c, i) => `<div class="cp-it" data-cp-pick="${grp}" data-c="${esc(c)}" ${i ? '' : 'data-enter="1"'} style="padding:8px 12px;cursor:pointer;border-top:1px solid var(--line)">${esc(c)}</div>`).join('') || (nq ? '' : '<div class="mut" style="padding:10px">مفيش عملاء</div>')}
+        ${near.length ? `<div class="mut" style="padding:8px 12px 4px;font-size:12.5px;border-top:1px solid var(--line)">🤔 ممكن تقصد عميل من دول؟ (نفس الاسم بس متكتب بشكل تاني)</div>${near.map(c => `<div class="cp-it cp-near" data-cp-pick="${grp}" data-c="${esc(c)}" style="padding:8px 12px;cursor:pointer;font-weight:700">↩︎ ${esc(c)}</div>`).join('')}` : ''}
+        ${nq && !exact ? `<div class="cp-it" data-cp-new="${grp}" data-c="${esc(nq)}" ${show.length || near.length ? '' : 'data-enter="1"'} style="padding:9px 12px;cursor:pointer;font-weight:700;color:var(--accent);border-top:1px solid var(--line)">➕ ${near.length ? 'لأ، ده عميل جديد: ' : ''}إضافة «${esc(nq)}» كعميل جديد</div>` : ''}
         ${hits.length > show.length ? `<div class="mut" style="padding:8px 12px;font-size:12.5px">و${fmt(hits.length - show.length)} عميل كمان… اكتب حروف أكتر من الاسم</div>` : ''}</div>` : ''}</div>`;
   },
   cpRefresh(grp, q = '', open = false, focus = true) {
@@ -1970,7 +2047,9 @@ const Deliveries = {
     box.dataset.reqVal = st.cust || ''; const keep = [...box.querySelectorAll(':scope > label, :scope > .fld-need')].filter(x => !(x.classList.contains('fld-need') && st.cust)).map(x => x.outerHTML).join(''); box.innerHTML = keep + this.custInner(grp, st, q, open);
     if (focus) { const i = box.querySelector('.cp-q'); this._cpb = true; try { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } finally { this._cpb = false; } }
   },
-  cpAdd(grp, name) { const st = this.st[grp], ch = this.chosen(st); if (!ch.includes(name)) ch.push(name); st.cust = ch.join(' + '); this.cpRefresh(grp, '', false, false); },
+  cpAdd(grp, name) {
+    const ex = this.customers().find(c => CM.norm(c) === CM.norm(name)); if (ex) name = ex;   // نفس العميل موجود بكتابة تانية: نستخدم الموجود
+    const st = this.st[grp], ch = this.chosen(st); if (!ch.includes(name)) ch.push(name); st.cust = ch.join(' + '); this.cpRefresh(grp, '', false, false); },
   usesStore(fid) { const f = Data.fac.get(+fid); return !!(f && /ستايروبور|المواد العازلة/.test(f.name)); },
   form(st, grp, editing = null) {
     const p = 'dl.' + grp;
@@ -2125,7 +2204,7 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('keydown', e => {
   const q = e.target.closest && e.target.closest('.cp-q'); if (!q) return;
-  if (e.key === 'Enter') { e.preventDefault(); const it = q.closest('.f').querySelector('.cp-list [data-cp-pick], .cp-list [data-cp-new]'); if (it) Deliveries.cpAdd(it.dataset.cpPick || it.dataset.cpNew, it.dataset.c); }
+  if (e.key === 'Enter') { e.preventDefault(); const it = q.closest('.f').querySelector('.cp-list [data-enter]'); if (it) Deliveries.cpAdd(it.dataset.cpPick || it.dataset.cpNew, it.dataset.c); }
   if (e.key === 'Escape') Deliveries.cpRefresh(q.dataset.cp, '', false, false);
 });
 // ============================================================================
@@ -4597,6 +4676,7 @@ const Admin = {
     const cell = (c, r) => c[2] === 'bool' ? `<input type="checkbox" data-f="${c[0]}" ${r && +r[c[0]] ? 'checked' : ''}>` : `<input data-f="${c[0]}" value="${esc(r ? r[c[0]] ?? '' : '')}" ${c[0] === 'number' ? 'dir="ltr"' : ''}>`;
     return `<div class="filters">${sel('ad.mt.t', st.t, Object.entries(MASTER).map(([k, v]) => [k, v.title]), { label: 'القائمة' })}</div>
       <div class="card"><h3>${M.title}</h3><div class="sub">عدّل مباشرة في الجدول ثم اضغط «حفظ التعديلات». إيقاف «مفعّل» يخفيه من النماذج دون أن يمس السجلات القديمة. الحذف متاح فقط لما ليس عليه أي سجلات.
+        ${st.t === 'customers' ? `<div style="margin:8px 0"><button class="btn sm" data-act="ad-cust-dups">🔗 الأسماء المتشابهة (نفس العميل متكتب بأكتر من طريقة)${(() => { try { const n = Fixes.open().filter(x => x.sec === 'customers').length; return n ? ` — ${fmt(n)}` : ''; } catch (e) { return ''; } })()}</button></div>` : ''}
         ${st.t === 'vehicles' ? 'تغيير رقم المركبة آمن: كل سجلاتها مربوطة بها وليست بالرقم. المعدل الطبيعي للديزل يُضبط من إعدادات قسم الديزل.' : ''}</div><div id="mt-msg"></div>
         <div class="tbl"><table><thead><tr>${M.cols.map(c => `<th>${c[1]}</th>`).join('')}<th></th></tr></thead><tbody>
         ${rows.map(r => `<tr data-mrow="${r.id}">${M.cols.map(c => `<td>${cell(c, r)}</td>`).join('')}<td><button class="btn ghost sm" data-act="ad-del-master" data-id="${r.id}">حذف</button></td></tr>`).join('')}
@@ -4751,6 +4831,7 @@ const Admin = {
     App.busy = false;
   },
   act: {
+    'cust-dups': () => { Object.assign(Fixes.st.list, { sec: 'customers', kind: '', q: '', vids: '', hidden: '', by: '' }); App.open('fixes'); },
     'add-user': (t) => Admin.addUser(t), 'edit-user': (t) => Admin.openUser(+t.dataset.id), 'save-user': (t) => Admin.saveUser(t),
     'save-master': (t) => Admin.saveMaster(t), 'del-master': (t) => Admin.delMaster(+t.dataset.id, t),
     'pg': (t) => { Admin.st.log.page += +t.dataset.d; App.render(); },
@@ -4801,12 +4882,12 @@ const Account = {
 // - «صحّح ←» بيفتح السند نفسه للتعديل (أو بينقلك على مكانه)، وفيه رقم مقترح لو ينفع
 // - «الرقم ده صح، تجاهل» بيخفي التنبيه للكل (محفوظ على السيرفر)
 // ============================================================================
-const FIX_SECS = { diesel: 'تعبئة الديزل', cars: 'صيانة السيارات', deliveries: 'الأوردرات المسلّمة', goods: 'البضاعة المسلّمة', materials: 'صلاحية المواد الخام', performance: 'مؤشر الأداء القياسي', employees: 'تقييم موظفي المخزن' };
+const FIX_SECS = { diesel: 'تعبئة الديزل', cars: 'صيانة السيارات', deliveries: 'الأوردرات المسلّمة', goods: 'البضاعة المسلّمة', materials: 'صلاحية المواد الخام', performance: 'مؤشر الأداء القياسي', employees: 'تقييم موظفي المخزن', customers: 'أسماء العملاء' };
 const li = t => t.startsWith('ال') ? 'ل' + t.slice(1) : 'ل' + t;   // «للعربية 55224» / «لكل العربيات»
 const RULE_NAMES = { 'zero:ref': 'تعبئة بصفر لتر', 'big:ref': 'لترات كتير بشكل غريب', 'dup:ref': 'تعبئة متكررة', 'odo:err': 'قراءات العداد الغلط', 'odo:mis': 'بداية الشهر مختلفة عن نهاية اللي قبله',
   'zero:exp': 'فاتورة بصفر', 'price:exp': 'سعر غريب لنفس المشكلة', 'drv:odd': 'السائق غريب على العربية', 'big:exp': 'مبلغ صيانة كبير بشكل غريب', 'dup:exp': 'رقم فاتورة متكرر', 'zero:dl': 'سند أوردرات بصفر', 'big:dl': 'عدد أوردرات كبير بشكل غريب', 'dup:dl': 'سند أوردرات متكرر',
   'zero:gd': 'سند بضاعة بصفر', 'dup:gd': 'سند بضاعة متكرر', 'exp:b': 'الانتهاء قبل الإنتاج', 'zero:b': 'دفعة بصفر', 'over:b': 'المسحوب أكبر من الدفعة', 'zero:i': 'تحويل بصفر',
-  'zero:pf': 'جرد بصفر أصناف', 'err:pf': 'الأخطاء أكبر من الأصناف', future: 'تاريخ في المستقبل', old: 'تاريخ قديم جدًا' };
+  'zero:pf': 'جرد بصفر أصناف', 'cust:dup': 'اسم عميل متكتب بأكتر من طريقة', 'err:pf': 'الأخطاء أكبر من الأصناف', future: 'تاريخ في المستقبل', old: 'تاريخ قديم جدًا' };
 // السند المكرر: نفس البيانات واتسجّل في نفس الوقت تقريبًا (لو اتسجّل في وقت مختلف غالبًا رحلة/تعبئة تانية حقيقية)
 const DUP_MIN = 10;
 const tms = v => v ? Date.parse(String(v).replace(' ', 'T') + 'Z') : NaN;
@@ -4822,7 +4903,7 @@ const medMap = m => new Map([...m].map(([k, a]) => [k, [a.length, median(a)]]));
 const median = a => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 const Fixes = {
   key: 'fixes', title: 'التصحيحات', icon: '🛠️',
-  get tables() { return [...new Set(['settings', ...Object.keys(FIX_SECS).filter(k => Data.level(k) >= 1).flatMap(k => PAGES[k].tables)])]; },
+  get tables() { return [...new Set(['settings', ...Object.keys(FIX_SECS).filter(k => PAGES[k] && Data.level(k) >= 1).flatMap(k => PAGES[k].tables)])]; },
   st: { list: { sec: '', kind: '', q: '', vids: '', more: 0, hidden: '', by: '', per: 'all' } },
   // ---------------- المتجاهَلة + اللي البرنامج اتعلّمه (محفوظين على السيرفر للكل) ----------------
   // { d: [بصمات اتجاهلت مرة واحدة], n: { بصمة: السبب }, r: [{ rc, ent ('*' = الكل), entL, max?, why, by, at }] }
@@ -4976,6 +5057,18 @@ const Fixes = {
     }
     // ---- تقييم الموظفين ----
     if (can('employees') && T.emprec.ready) for (const r of T.emprec.rows) { curBy = r.created_by || ''; dateChk('employees', r.id, r.record_no, r.date, eName(r.employee_id), { fn: 'edit', args: ['employees', r.id] }); }
+    // ---- أسماء العملاء: نفس العميل متكتب بأكتر من طريقة ----
+    if (can('deliveries') && T.cust.ready && T.deliveries.ready && Deliveries.hasCust()) {
+      const cnt = new Map(); for (const r of T.deliveries.rows) for (const c of String(r.customer || '').split('+')) { const x = c.trim(); if (x) cnt.set(x, (cnt.get(x) || 0) + 1); }
+      const names = Deliveries.customers(), nk = names.join('\n');
+      if (this._cmK !== nk) { this._cmK = nk; this._cmG = CM.groups(names); }
+      const WHY = { same: 'نفس الاسم متكتب بطرق مختلفة (مسافة، «ال»، ة و ه، ى و ي، همزة)', trans: 'نفس الاسم متكتب مرة عربي ومرة إنجليزي', typo: 'الاسمين قريبين جدًا (ممكن غلطة في حرف) — اتأكد إنهم نفس العميل' };
+      this._cmG.forEach((g, i) => {
+        const keep = [...g.names].sort((a, b) => (cnt.get(b) || 0) - (cnt.get(a) || 0))[0], k2 = (cnt.get(keep) || 0) ? keep : g.keep, ns = [...g.names].sort(abc);
+        push({ by: '', rc: 'cust:dup', sec: 'customers', id: 'cu-' + ns.join('|'), fp: 'cust:dup:' + ns.join('|'), no: '', date: '', month: true,
+          what: ns.map(n => `${n} (${fmt(cnt.get(n) || 0)} سند)`).join(' ⇄ '), why: WHY[g.kind], fix: `الاسم الموحّد: ${k2}`, warn: g.kind !== 'same', go: { fn: 'cust', args: [ns, k2] }, lv: 3, lvSec: 'deliveries' });
+      });
+    }
     out.sort((a, b) => (a.warn ? 1 : 0) - (b.warn ? 1 : 0) || String(b.date || '').localeCompare(String(a.date || '')));
     this._v = ver; this._all = out; return out;
   },
@@ -4998,8 +5091,8 @@ const Fixes = {
     const shown = L.slice(0, 200 + st.more * 200);
     const row = x => `<tr><td>${esc(FIX_SECS[x.sec])}</td><td>${esc(x.no || '')}</td><td>${x.month ? '' : esc(x.date || '')}</td><td style="white-space:normal">${esc(x.what)}</td>
       <td class="${x.warn ? 'mut' : 'st-bad'}" style="white-space:normal;min-width:220px">${x.warn ? 'ملاحظة: ' : ''}${esc(x.why)}</td><td style="white-space:normal">${x.fix ? `<b>${esc(x.fix)}</b>` : ''}</td><td>${esc(this.uname(x.by))}</td>
-      <td style="white-space:nowrap">${Data.level(x.sec) >= x.lv ? `<button class="btn sm" data-act="fx-go" data-i="${all.indexOf(x)}">صحّح ←</button>` : ''}
-        ${this.canDismiss() ? (hidden ? (d.has(x.fp) ? `<button class="btn ghost sm" data-act="fx-undo" data-fp="${esc(x.fp)}">رجّعه</button>` : `<span class="mut" style="font-size:12px">اتعلّمها: ${esc((this.learned(x, S.r) || {}).why || '')}</span>`) : `<button class="btn ghost sm" data-act="fx-skip" data-i="${all.indexOf(x)}" title="الرقم ده صح؛ قولّي ليه علشان أتعلّم">✓ صح، تجاهل</button>`) : ''}
+      <td style="white-space:nowrap">${Data.level(x.lvSec || x.sec) >= x.lv ? `<button class="btn sm" data-act="fx-go" data-i="${all.indexOf(x)}">${x.sec === 'customers' ? '🔗 وحّد ←' : 'صحّح ←'}</button>` : ''}
+        ${this.canDismiss() ? (hidden ? (d.has(x.fp) ? `<button class="btn ghost sm" data-act="fx-undo" data-fp="${esc(x.fp)}">رجّعه</button>` : `<span class="mut" style="font-size:12px">اتعلّمها: ${esc((this.learned(x, S.r) || {}).why || '')}</span>`) : x.sec === 'customers' ? `<button class="btn ghost sm" data-act="fx-notsame" data-i="${all.indexOf(x)}" title="دول عملاء مختلفين، متطلعهمش تاني">✗ مش نفس العميل</button>` : `<button class="btn ghost sm" data-act="fx-skip" data-i="${all.indexOf(x)}" title="الرقم ده صح؛ قولّي ليه علشان أتعلّم">✓ صح، تجاهل</button>`) : ''}
         ${hidden && S.n[x.fp] ? `<div class="mut" style="font-size:12px;white-space:normal">السبب: ${esc(S.n[x.fp])}</div>` : ''}</td></tr>`;
     return `<div class="card hero" style="margin-bottom:14px"><h2>${hidden ? 'التنبيهات اللي اتجاهلت' : errs + notes ? `<span>محتاجة تصحيح:</span> <bdi>${fmt(errs)}</bdi>${notes ? ` · <span>ملاحظات:</span> <bdi>${fmt(notes)}</bdi>` : ''}` : 'كل البيانات سليمة ✓'}</h2>
         <p>البرنامج بيراجع اللي اتسجّل في كل الأقسام. دوس «صحّح ←» يفتحلك السند على طول، ولو الرقم صح فعلًا دوس «✓ صح، تجاهل» وميظهرش تاني.</p>
@@ -5023,6 +5116,7 @@ const Fixes = {
     if (x.go.fn === 'issue') return Materials.openEditIssue(a0);
     if (x.go.fn === 'odo') return Diesel.goto(a0, a1, a2);
     if (x.go.fn === 'dsEdit') return Diesel.openEdit(a0);
+    if (x.go.fn === 'cust') return this.mergeAsk(a0, a1);
     if (x.go.fn === 'dsMonth') { Diesel.st.tab = 'mon'; LS.set('qw_ds_tab', 'mon'); Diesel.st.mon.month = a0; return App.open('diesel'); }
   },
   async save(S, msg) {
@@ -5113,6 +5207,32 @@ const Fixes = {
         rows.map(r => [`<b>${esc(r.name)}</b>${r.name !== r.u ? `<div class="mut" style="font-size:12px">${esc(r.u)}</div>` : ''}`, fmt(r.n), r.err ? `<b class="st-bad">${fmt(r.err)}</b>` : '0', fmt(r.note), `${fmt(r.rate, 1)}%`, `<span style="white-space:normal">${esc(r.top)}</span>`, `<span style="white-space:normal">${esc(r.secs)}</span>`,
           r.err + r.note ? `<button class="btn sm" data-act="fx-by" data-u="${esc(r.u)}">اعرض أخطاءه ←</button>` : '']), { num: [1, 2, 3, 4], max: 900 }) : '<div class="empty">مفيش بيانات في الفترة دي</div>'}</div>`;
   },
+  // ---------------- توحيد اسم العميل ----------------
+  mergeAsk(names, keep) {
+    const cnt = n => T.deliveries.rows.filter(r => String(r.customer || '').split('+').some(c => c.trim() === n)).length;
+    modal(`<h3>🔗 توحيد اسم العميل</h3><p class="mut">اختار الاسم الصح. كل السندات المكتوب فيها الأسماء التانية هتتعدّل للاسم ده، والأسماء التانية هتتشال من قائمة العملاء علشان محدش يختارها تاني.</p>
+      ${names.map(n => `<div style="display:flex;gap:12px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:12px;margin-bottom:8px">
+        <label style="display:flex;gap:8px;align-items:center;cursor:pointer;flex:1"><input type="radio" name="cm-keep" value="${esc(n)}" ${n === keep ? 'checked' : ''}> <b>${esc(n)}</b> <span class="mut" style="font-size:12.5px">(${fmt(cnt(n))} سند)</span></label>
+        <label style="display:flex;gap:6px;align-items:center;font-size:13px;cursor:pointer"><input type="checkbox" class="cm-in" value="${esc(n)}" checked> نفس العميل</label></div>`).join('')}
+      <div class="f" style="margin-top:6px"><label>أو اكتب الاسم الصح بنفسك (اختياري)</label><input id="cm-other" placeholder="مثلًا: ابراهيم اليحيى"></div>
+      <div class="mut" style="font-size:12.5px;margin-top:4px">شيل علامة «نفس العميل» من أي اسم مش تبعهم وهيفضل زي ما هو.</div>
+      <div id="cm-msg"></div>
+      <div style="display:flex;gap:10px;margin-top:12px"><button class="btn" data-act="fx-merge">🔗 وحّد</button><button class="btn ghost" data-act="close">إلغاء</button></div>`, 600);
+  },
+  async merge(btn) {
+    const other = ($('#cm-other') || {}).value.trim().replace(/\s+/g, ' '), keep = other || (($('input[name="cm-keep"]:checked') || {}).value || '');
+    const inc = [...document.querySelectorAll('.cm-in:checked')].map(x => x.value), drop = inc.filter(n => n !== keep), msg = $('#cm-msg');
+    if (!keep) { msg.innerHTML = '<div class="err">اختار الاسم الصح</div>'; return; }
+    if (!drop.length) { msg.innerHTML = '<div class="err">علّم «نفس العميل» على اسم تاني على الأقل علشان يتوحّد مع الاسم الصح</div>'; return; }
+    if (!navigator.onLine || !API.session) { msg.innerHTML = '<div class="err">التوحيد محتاج إنترنت، جرّب لما النت يرجع</div>'; return; }
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span> جارٍ التوحيد...';
+    try {
+      const n = await API.rpc('merge_customers', { p_keep: keep, p_drop: drop, p_now: nowKw() });
+      await Promise.all([T.deliveries.sync(), T.cust.sync()]); log('deliveries', 'توحيد اسم عميل', `${drop.join('، ')} ← ${keep}`);
+      this._v = null; closeModal(); toast(`✓ اتوحّدوا في «${keep}» — ${fmt(+n || 0)} سند اتعدّل`); App.render(); App.fixBadge();
+    } catch (e) { msg.innerHTML = `<div class="err">${esc(e.code === 'PGRST202' || e.status === 404 ? 'محتاج تشغّل ملف «توحيد_العملاء.sql» في Supabase مرة واحدة الأول' : arErr(e))}</div>`; btn.disabled = false; btn.textContent = '🔗 وحّد'; }
+  },
+  notSame(i) { const x = this.all()[i]; if (!x) return; const S = this.store(); S.d = [...new Set([...S.d, x.fp])]; S.n[x.fp] = 'مش نفس العميل'; return this.save(S, '✓ تمام، مش هيطلعوا تاني كأنهم نفس العميل'); },
   async unlearn(i) { const S = this.store(); S.r = S.r.filter((_, k) => k !== i); return this.save(S, '✓ البرنامج نسي القاعدة دي، والتنبيهات رجعت'); },
   // من أي قسم: افتح التصحيحات على عربيات معيّنة
   showFor(sec, vids) { this.st.list = { ...this.st.list, sec, vids: vids.join(','), kind: '', q: '', hidden: '' }; return App.open('fixes'); },
@@ -5124,6 +5244,7 @@ const Fixes = {
     'clear': () => { Fixes.st.list.vids = ''; App.render(); },
     'addr': () => { const v = ($('#fx-new-r') || {}).value.trim(); if (!v) return; const S = Fixes.store(); if (S.s.includes(v)) return toast('السبب ده موجود بالفعل', true); S.s = [...S.s, v]; Fixes.save(S, '✓ اتضاف للأسباب المحفوظة'); },
     'delr': (t) => { const S = Fixes.store(); S.s = S.s.filter(r => r !== t.dataset.r); Fixes.save(S, '✓ اتشال من الأسباب المحفوظة'); },
+    'merge': (t) => Fixes.merge(t), 'notsame': (t) => Fixes.notSame(+t.dataset.i),
     'clearby': () => { Fixes.st.list.by = ''; App.render(); },
     'by': (t) => { Object.assign(Fixes.st.list, { by: t.dataset.u, hidden: '', sec: '', kind: '', q: '', vids: '' }); App.render(); },
   },
